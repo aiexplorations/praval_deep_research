@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Base - Praval Deep Research</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .paper-row:hover {
+            background-color: #f9fafb;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Header with Navigation -->
+    <header class="bg-white shadow-sm border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-900">📚 Knowledge Base Management</h1>
+                    <p class="text-sm text-gray-600 mt-1">Manage your indexed research papers</p>
+                </div>
+                <a href="index.html" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                    ← Back to Search
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        <!-- Statistics Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-sm text-gray-600">Total Papers</div>
+                <div class="text-3xl font-bold text-gray-900 mt-2" id="total-papers">0</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-sm text-gray-600">Total Vectors</div>
+                <div class="text-3xl font-bold text-blue-600 mt-2" id="total-vectors">0</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-sm text-gray-600">Avg Chunks/Paper</div>
+                <div class="text-3xl font-bold text-green-600 mt-2" id="avg-chunks">0</div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="bg-white rounded-lg shadow p-4 mb-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <button onclick="loadPapers()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+                        🔄 Refresh
+                    </button>
+                </div>
+                <div>
+                    <button onclick="clearKnowledgeBase()" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors">
+                        🗑️ Clear All Papers
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Papers Table -->
+        <div class="bg-white rounded-lg shadow overflow-hidden">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Paper
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Paper ID
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Chunks
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Categories
+                        </th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Actions
+                        </th>
+                    </tr>
+                </thead>
+                <tbody id="papers-table" class="bg-white divide-y divide-gray-200">
+                    <!-- Papers will be loaded here -->
+                </tbody>
+            </table>
+
+            <div id="loading-state" class="p-8 text-center text-gray-600">
+                Loading papers...
+            </div>
+
+            <div id="empty-state" class="p-8 text-center text-gray-600 hidden">
+                No papers indexed yet. Go to <a href="index.html" class="text-blue-600 hover:underline">search</a> to add papers.
+            </div>
+        </div>
+
+    </main>
+
+    <script src="kb-app.js"></script>
+</body>
+</html>

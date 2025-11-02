@@ -1,0 +1,315 @@
+services:
+  # ==========================================
+  # Application Services
+  # ==========================================
+
+  # FastAPI Backend
+  research_api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: research_api
+    ports:
+      - "8000:8000"
+    environment:
+      # Application
+      APP_NAME: agentic_deep_research
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+
+      # API Keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+      # Praval
+      PRAVAL_DEFAULT_PROVIDER: ${PRAVAL_DEFAULT_PROVIDER:-openai}
+      PRAVAL_DEFAULT_MODEL: ${PRAVAL_DEFAULT_MODEL:-gpt-4o-mini}
+
+      # Infrastructure (using service names)
+      RABBITMQ_URL: amqp://research_user:research_pass@rabbitmq:5672/research_vhost
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION_NAME: ${QDRANT_COLLECTION_NAME:-research_vectors}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-research-papers}
+      MINIO_SECURE: "false"
+      REDIS_URL: redis://redis:6379
+
+      # Embedding Configuration
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      CHUNK_SIZE: ${CHUNK_SIZE:-1000}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+      MAX_CHUNKS_PER_PAPER: ${MAX_CHUNKS_PER_PAPER:-50}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      qdrant:
+        condition: service_started  # Changed from healthy - Qdrant container is minimal
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - research_network
+    restart: unless-stopped
+    healthcheck:
+      test: curl -f http://localhost:8000/health || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Praval Agent Workers
+  research_agents:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agents
+    container_name: research_agents
+    environment:
+      # Application
+      APP_NAME: agentic_deep_research_agents
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+
+      # API Keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+      # Praval
+      PRAVAL_DEFAULT_PROVIDER: ${PRAVAL_DEFAULT_PROVIDER:-openai}
+      PRAVAL_DEFAULT_MODEL: ${PRAVAL_DEFAULT_MODEL:-gpt-4o-mini}
+
+      # Infrastructure (using service names)
+      RABBITMQ_URL: amqp://research_user:research_pass@rabbitmq:5672/research_vhost
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION_NAME: ${QDRANT_COLLECTION_NAME:-research_vectors}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-research-papers}
+      MINIO_SECURE: "false"
+      REDIS_URL: redis://redis:6379
+
+      # Embedding Configuration
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      CHUNK_SIZE: ${CHUNK_SIZE:-1000}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+      MAX_CHUNKS_PER_PAPER: ${MAX_CHUNKS_PER_PAPER:-50}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      qdrant:
+        condition: service_started  # Changed from healthy - Qdrant container is minimal
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      research_api:
+        condition: service_healthy
+    networks:
+      - research_network
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # React Frontend (will be built after frontend is created)
+  research_frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: research_frontend
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: http://localhost:8000
+    depends_on:
+      research_api:
+        condition: service_healthy
+    networks:
+      - research_network
+    restart: unless-stopped
+    profiles:
+      - with-frontend
+
+  # ==========================================
+  # Infrastructure Services
+  # ==========================================
+
+  # Message Broker
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: research_rabbitmq
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: research_user
+      RABBITMQ_DEFAULT_PASS: research_pass
+      RABBITMQ_DEFAULT_VHOST: research_vhost
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - research_network
+    restart: unless-stopped
+
+  # Vector Database
+  qdrant:
+    image: qdrant/qdrant:v1.7.3
+    container_name: research_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ./docker/qdrant_config.yaml:/qdrant/config/production.yaml:ro
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__LOG_LEVEL: INFO
+    # Health check disabled - container is minimal, use service_started condition instead
+    # Qdrant is ready when HTTP responds on port 6333 (verified manually)
+    healthcheck:
+      disable: true
+    networks:
+      - research_network
+    restart: unless-stopped
+
+  # Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: research_minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: curl -f http://localhost:9000/minio/health/live || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - research_network
+    restart: unless-stopped
+
+  # Cache & Session Store
+  redis:
+    image: redis:7-alpine
+    container_name: research_redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server 
+      --appendonly yes 
+      --maxmemory 1gb 
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: redis-cli ping || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - research_network
+    restart: unless-stopped
+
+  # Development Tools
+  adminer:
+    image: adminer:latest
+    container_name: research_adminer
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: research_postgres
+    networks:
+      - research_network
+    restart: unless-stopped
+    profiles:
+      - dev-tools
+
+  # Optional: PostgreSQL for metadata storage
+  postgres:
+    image: postgres:15-alpine
+    container_name: research_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: research_metadata
+      POSTGRES_USER: research_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-research_pass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: pg_isready -U research_user -d research_metadata
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - research_network
+    restart: unless-stopped
+    profiles:
+      - with-postgres
+
+  # Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: research_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.external-url=http://localhost:9090'
+    networks:
+      - research_network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+volumes:
+  rabbitmq_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  minio_data:
+    driver: local
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  prometheus_data:
+    driver: local
+
+networks:
+  research_network:
+    driver: bridge

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Praval Deep Research</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+
+    <!-- LaTeX/Math rendering with KaTeX -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+
+    <style>
+        .message-user {
+            background: #3b82f6;
+            color: white;
+        }
+        .message-assistant {
+            background: #f3f4f6;
+            color: #1f2937;
+        }
+
+        /* Markdown content styling */
+        .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+            font-weight: 600;
+            margin-top: 1em;
+            margin-bottom: 0.5em;
+        }
+        .markdown-content h1 { font-size: 1.5em; }
+        .markdown-content h2 { font-size: 1.3em; }
+        .markdown-content h3 { font-size: 1.1em; }
+
+        .markdown-content p {
+            margin-bottom: 0.75em;
+            line-height: 1.6;
+        }
+
+        .markdown-content ul, .markdown-content ol {
+            margin-left: 1.5em;
+            margin-bottom: 0.75em;
+        }
+
+        .markdown-content li {
+            margin-bottom: 0.25em;
+        }
+
+        .markdown-content code {
+            background: #e5e7eb;
+            padding: 0.125rem 0.25rem;
+            border-radius: 0.25rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .markdown-content pre {
+            background: #1f2937;
+            color: #f3f4f6;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin-bottom: 0.75em;
+        }
+
+        .markdown-content pre code {
+            background: transparent;
+            padding: 0;
+            color: inherit;
+        }
+
+        .markdown-content blockquote {
+            border-left: 4px solid #3b82f6;
+            padding-left: 1rem;
+            margin-left: 0;
+            margin-bottom: 0.75em;
+            color: #6b7280;
+        }
+
+        .markdown-content a {
+            color: #3b82f6;
+            text-decoration: underline;
+        }
+
+        .markdown-content strong {
+            font-weight: 600;
+        }
+
+        .markdown-content em {
+            font-style: italic;
+        }
+
+        /* KaTeX math styling */
+        .katex {
+            font-size: 1.1em;
+        }
+
+        .katex-display {
+            margin: 1em 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+
+        /* Copy button styling */
+        .copy-button {
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .message-assistant:hover .copy-button {
+            opacity: 1;
+        }
+
+        .copy-button:hover {
+            background-color: #e5e7eb;
+        }
+
+        .copy-button.copied {
+            background-color: #10b981;
+            color: white;
+        }
+        .agent-status {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+        .paper-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+        .source-citation {
+            border-left: 3px solid #3b82f6;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Header -->
+    <header class="bg-white shadow-sm border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-900">🔬 Praval Deep Research</h1>
+                    <p class="text-sm text-gray-600 mt-1">AI-Powered Research Assistant with Real-time Agent Updates</p>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <a href="knowledge-base.html" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+                        📚 Knowledge Base
+                    </a>
+                    <div id="connection-status" class="flex items-center space-x-2">
+                        <div class="h-2 w-2 rounded-full bg-gray-400" id="status-indicator"></div>
+                        <span class="text-sm text-gray-600" id="status-text">Connecting...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Search Section -->
+        <section class="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">📚 Search Research Papers</h2>
+
+            <div class="flex space-x-4 mb-4">
+                <input
+                    type="text"
+                    id="search-query"
+                    placeholder="Enter research query (e.g., 'machine learning transformers')..."
+                    class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    onkeypress="if(event.key === 'Enter') searchPapers()"
+                />
+
+                <select id="search-domain" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    <option value="computer_science">Computer Science</option>
+                    <option value="artificial_intelligence">AI</option>
+                    <option value="machine_learning">Machine Learning</option>
+                    <option value="physics">Physics</option>
+                    <option value="mathematics">Mathematics</option>
+                    <option value="general">General</option>
+                </select>
+
+                <button
+                    onclick="searchPapers()"
+                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 font-medium"
+                    id="search-btn"
+                >
+                    Search
+                </button>
+            </div>
+
+            <!-- Agent Status Updates -->
+            <div id="agent-status" class="hidden bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                <div class="flex items-center space-x-2">
+                    <div class="agent-status h-2 w-2 rounded-full bg-blue-600"></div>
+                    <span class="text-sm font-medium text-blue-900" id="agent-status-text">Processing...</span>
+                </div>
+                <div id="agent-details" class="mt-2 text-sm text-blue-800"></div>
+            </div>
+
+            <!-- Index Selected Button -->
+            <div class="mt-4 flex justify-end hidden" id="index-button-container">
+                <button
+                    id="index-selected-btn"
+                    onclick="indexSelectedPapers()"
+                    disabled
+                    class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Select Papers to Index
+                </button>
+            </div>
+
+            <!-- Papers Results -->
+            <div id="papers-container" class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6"></div>
+        </section>
+
+        <!-- Q&A Section -->
+        <section class="bg-white rounded-lg shadow-sm p-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">💬 Ask Questions About Research</h2>
+
+            <!-- Chat Messages -->
+            <div id="chat-messages" class="h-96 overflow-y-auto border border-gray-200 rounded-lg p-4 mb-4 space-y-4 bg-gray-50"></div>
+
+            <!-- Chat Input -->
+            <div class="flex space-x-4">
+                <input
+                    type="text"
+                    id="question-input"
+                    placeholder="Ask a question about the research papers..."
+                    class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    onkeypress="if(event.key === 'Enter') askQuestion()"
+                />
+
+                <button
+                    onclick="askQuestion()"
+                    class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors duration-200 font-medium"
+                    id="ask-btn"
+                >
+                    Ask
+                </button>
+            </div>
+
+            <!-- Follow-up Questions -->
+            <div id="followup-questions" class="mt-4 space-y-2"></div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

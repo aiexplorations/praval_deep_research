@@ -1,0 +1,19 @@
+# Simple static file server for HTML/CSS/JS frontend
+FROM nginx:alpine
+
+# Copy custom nginx config
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+
+# Copy static HTML/CSS/JS files
+COPY frontend/*.html /usr/share/nginx/html/
+COPY frontend/*.js /usr/share/nginx/html/
+
+# Expose port
+EXPOSE 80
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost/ || exit 1
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]

@@ -1,0 +1,56 @@
+# Qdrant Configuration for Research System
+# Documentation: https://qdrant.tech/documentation/guides/configuration/
+
+debug: false
+log_level: INFO
+
+storage:
+  # Storage configuration
+  storage_path: /qdrant/storage
+  snapshots_path: /qdrant/snapshots
+  temp_path: /qdrant/temp
+
+service:
+  # Service configuration
+  host: 0.0.0.0
+  http_port: 6333
+  grpc_port: 6334
+  enable_cors: true
+  max_request_size_mb: 32
+  max_workers: 0  # Auto-detect based on CPU cores
+
+cluster:
+  # Cluster configuration (disabled for single-node setup)
+  enabled: false
+
+# Collection settings
+collections:
+  # Default settings for new collections
+  default_segment_number: 2
+  
+# Performance tuning
+telemetry_disabled: true
+
+# Optimizer settings
+optimizer:
+  # Optimization settings for better performance
+  deleted_threshold: 0.2
+  vacuum_min_vector_number: 1000
+  default_segment_number: 2
+  max_segment_size_kb: 200000
+  memmap_threshold_kb: 200000
+  indexing_threshold_kb: 20000
+  flush_interval_sec: 30
+  max_optimization_threads: 2
+
+# HNSW configuration for better search performance
+hnsw_config:
+  m: 16
+  ef_construct: 100
+  full_scan_threshold: 10000
+  max_indexing_threads: 2
+
+# WAL configuration
+wal:
+  wal_capacity_mb: 32
+  wal_segments_ahead: 0

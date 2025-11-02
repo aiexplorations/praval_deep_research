@@ -1,0 +1,923 @@
+"""
+Research endpoints for paper discovery and Q&A.
+
+This module provides REST API endpoints that interface with
+Praval research agents for academic paper discovery and
+intelligent question answering.
+"""
+
+import asyncio
+import time
+import uuid
+from typing import Dict, Any, List
+from fastapi import APIRouter, HTTPException, status, BackgroundTasks
+from fastapi.responses import StreamingResponse
+import structlog
+
+from ..models.research import (
+    ResearchQuery, ResearchResponse, PaperResult,
+    QuestionRequest, QuestionResponse, SourceCitation,
+    ErrorResponse
+)
+from agents import (
+    paper_discovery_agent,
+    document_processing_agent,
+    semantic_analysis_agent,
+    summarization_agent,
+    qa_specialist_agent,
+    research_advisor_agent
+)
+from processors.arxiv_client import (
+    search_arxiv_papers,
+    calculate_paper_relevance,
+    ArXivAPIError
+)
+from praval import start_agents
+from ...core.messaging import get_publisher
+from ...storage.vector_search import get_vector_search_client
+from openai import OpenAI
+
+logger = structlog.get_logger()
+router = APIRouter(prefix="/research", tags=["research"])
+
+# Track ongoing research sessions
+_active_sessions: Dict[str, Dict[str, Any]] = {}
+
+
+async def _initialize_agents_if_needed():
+    """Ensure research agents are initialized and running."""
+    try:
+        # Start all research agents using Praval's start_agents
+        agents = [
+            paper_discovery_agent,
+            document_processing_agent, 
+            semantic_analysis_agent,
+            summarization_agent,
+            qa_specialist_agent,
+            research_advisor_agent
+        ]
+        
+        # Initialize agent system
+        result = start_agents(*agents)
+        logger.info("Praval research agents initialized", agents_count=len(agents))
+        return True
+        
+    except Exception as e:
+        logger.warning("Failed to initialize Praval agents", error=str(e))
+        return False
+
+
+def _convert_to_paper_results(papers: list) -> list[PaperResult]:
+    """Convert agent response papers to API models."""
+    results = []
+    
+    for paper in papers:
+        try:
+            result = PaperResult(
+                title=paper.get('title', 'Unknown Title'),
+                authors=paper.get('authors', []),
+                abstract=paper.get('abstract', ''),
+                arxiv_id=paper.get('arxiv_id'),
+                url=paper.get('url'),
+                published_date=paper.get('published_date'),
+                venue=paper.get('venue'),
+                relevance_score=paper.get('relevance', 0.0),
+                categories=paper.get('categories', [])
+            )
+            results.append(result)
+        except Exception as e:
+            logger.warning("Failed to convert paper result", paper=paper, error=str(e))
+            continue
+    
+    return results
+
+
+def _convert_to_source_citations(sources: list) -> list[SourceCitation]:
+    """Convert agent response sources to API models."""
+    citations = []
+    
+    for source in sources:
+        try:
+            citation = SourceCitation(
+                title=source.get('title', 'Unknown Source'),
+                paper_id=source.get('paper_id', ''),
+                chunk_index=source.get('chunk_index', 0),
+                relevance_score=source.get('relevance_score', 0.0),
+                excerpt=source.get('excerpt')
+            )
+            citations.append(citation)
+        except Exception as e:
+            logger.warning("Failed to convert source citation", source=source, error=str(e))
+            continue
+    
+    return citations
+
+
+@router.post("/search", response_model=ResearchResponse, summary="Search for research papers")
+async def search_papers(
+    query: ResearchQuery,
+    background_tasks: BackgroundTasks
+) -> ResearchResponse:
+    """
+    Search for academic papers using intelligent Praval agents.
+    
+    This endpoint leverages distributed research agents to:
+    - Optimize search queries based on domain expertise
+    - Search multiple academic databases (ArXiv, etc.)
+    - Apply quality filters and relevance scoring
+    - Learn from search patterns for future optimization
+    
+    The agents use memory to improve search quality over time.
+    """
+    session_id = str(uuid.uuid4())
+    start_time = time.time()
+    
+    try:
+        logger.info(
+            "Starting paper search",
+            session_id=session_id,
+            query=query.query,
+            domain=query.domain,
+            max_results=query.max_results
+        )
+        
+        # Ensure agents are initialized
+        background_tasks.add_task(_initialize_agents_if_needed)
+        
+        # Track session
+        _active_sessions[session_id] = {
+            "type": "search",
+            "query": query.query,
+            "started_at": time.time(),
+            "status": "running"
+        }
+        
+        try:
+            # Initialize agents if needed
+            agents_ready = await _initialize_agents_if_needed()
+            if not agents_ready:
+                logger.warning("Agents not ready, falling back to direct ArXiv search")
+                
+            # Send message to agents via RabbitMQ
+            try:
+                publisher = get_publisher()
+                publisher.publish_search_request(
+                    query=query.query,
+                    domain=query.domain.value,
+                    max_results=query.max_results,
+                    session_id=session_id,
+                    quality_threshold=query.quality_threshold
+                )
+
+                # Also do direct search for immediate response
+                real_papers = await search_arxiv_papers(
+                    query=query.query,
+                    max_results=query.max_results,
+                    domain=query.domain.value.lower()
+                )
+                
+                # Calculate relevance scores for papers
+                for paper in real_papers:
+                    paper['relevance'] = calculate_paper_relevance(paper, query.query)
+                
+                # Sort by relevance and apply quality threshold
+                filtered_papers = [
+                    paper for paper in real_papers 
+                    if paper.get('relevance', 0.0) >= query.quality_threshold
+                ]
+                filtered_papers.sort(key=lambda p: p.get('relevance', 0.0), reverse=True)
+                
+                logger.info(
+                    "Research workflow initiated via Praval agents",
+                    total_found=len(real_papers),
+                    after_filtering=len(filtered_papers),
+                    agents_triggered=True
+                )
+                
+            except ArXivAPIError as e:
+                logger.error("ArXiv API error", error=str(e))
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"ArXiv search failed: {str(e)}"
+                )
+            except Exception as e:
+                logger.error("Unexpected error in research workflow", error=str(e))
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Research workflow failed: {str(e)}"
+                )
+            
+            # Convert to API models
+            paper_results = _convert_to_paper_results(filtered_papers)
+            
+            # Calculate response time
+            response_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Update session status
+            _active_sessions[session_id]["status"] = "completed"
+            _active_sessions[session_id]["papers_found"] = len(paper_results)
+            
+            response = ResearchResponse(
+                query=query.query,
+                domain=query.domain.value,
+                papers=paper_results,
+                total_found=len(paper_results),
+                search_time_ms=response_time_ms,
+                optimization_applied=True,
+                optimized_query=f"ArXiv search: {query.query} in {query.domain.value}",
+                agent_metadata={
+                    "session_id": session_id,
+                    "search_source": "arxiv_api",
+                    "quality_filtered": True,
+                    "relevance_threshold": query.quality_threshold
+                }
+            )
+            
+            logger.info(
+                "Paper search completed",
+                session_id=session_id,
+                papers_found=len(paper_results),
+                response_time_ms=response_time_ms
+            )
+            
+            return response
+            
+        finally:
+            # Clean up session tracking
+            if session_id in _active_sessions:
+                _active_sessions[session_id]["completed_at"] = time.time()
+        
+    except Exception as e:
+        logger.error("Paper search failed", session_id=session_id, error=str(e))
+        
+        # Update session status
+        if session_id in _active_sessions:
+            _active_sessions[session_id]["status"] = "error"
+            _active_sessions[session_id]["error"] = str(e)
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Search failed: {str(e)}"
+        )
+
+
+@router.post("/ask", response_model=QuestionResponse, summary="Ask research questions")
+async def ask_question(
+    request: QuestionRequest,
+    background_tasks: BackgroundTasks
+) -> QuestionResponse:
+    """
+    Get intelligent answers to research questions.
+    
+    This endpoint uses specialized Q&A agents that:
+    - Retrieve relevant context from paper knowledge base
+    - Apply personalization based on user history
+    - Generate comprehensive, evidence-based answers
+    - Suggest follow-up questions for deeper exploration
+    - Cite specific sources with relevance scores
+    
+    The agents learn from user interactions to improve personalization.
+    """
+    session_id = str(uuid.uuid4())
+    start_time = time.time()
+    
+    try:
+        logger.info(
+            "Processing Q&A request",
+            session_id=session_id,
+            question=request.question,
+            user_id=request.user_id,
+            conversation_id=request.conversation_id
+        )
+        
+        # Ensure agents are initialized  
+        background_tasks.add_task(_initialize_agents_if_needed)
+        
+        # Track session
+        _active_sessions[session_id] = {
+            "type": "qa",
+            "question": request.question,
+            "started_at": time.time(),
+            "status": "running"
+        }
+        
+        try:
+            # Initialize agents if needed
+            agents_ready = await _initialize_agents_if_needed()
+
+            # Send Q&A request to agents via RabbitMQ
+            # Handle None values in request to avoid subscript errors
+            try:
+                publisher = get_publisher()
+                publish_kwargs = {
+                    "question": request.question,
+                    "session_id": session_id,
+                    "user_id": request.user_id or "anonymous",
+                    "conversation_id": request.conversation_id or session_id,
+                }
+
+                # Only add context if it's not None
+                if request.context is not None:
+                    publish_kwargs["context"] = request.context
+
+                publisher.publish_qa_request(**publish_kwargs)
+                logger.info("Successfully published Q&A request to agents",
+                           session_id=session_id,
+                           agents_ready=agents_ready)
+            except Exception as pub_error:
+                # Log but don't fail - we can still process directly
+                logger.warning("Failed to publish Q&A request to agents, continuing with direct processing",
+                              error=str(pub_error),
+                              session_id=session_id,
+                              exc_info=True)
+
+            logger.info("Sent Q&A request to agents", agents_ready=agents_ready)
+
+            # Perform vector search to retrieve relevant context
+            logger.info(f"Initializing vector search client for question: {request.question[:50]}")
+            vector_client = get_vector_search_client()
+
+            if vector_client is None:
+                logger.error("Vector search client is None - cannot perform search")
+                relevant_chunks = []
+            else:
+                logger.info("Vector client initialized, performing search")
+                relevant_chunks = vector_client.search(
+                    query=request.question,
+                    top_k=5,
+                    score_threshold=0.3  # Lowered from 0.6 for better recall
+                )
+                logger.info(f"Search completed, found {len(relevant_chunks) if relevant_chunks else 0} chunks")
+
+            # Build context from retrieved chunks
+            # Ensure relevant_chunks is a list and filter out any None values
+            if not isinstance(relevant_chunks, list):
+                logger.error(f"relevant_chunks is not a list: {type(relevant_chunks)}")
+                relevant_chunks = []
+
+            relevant_chunks = [c for c in relevant_chunks if c is not None]
+
+            if relevant_chunks:
+                logger.info(f"Building context from {len(relevant_chunks)} chunks")
+                try:
+                    context_text = "\n\n".join([
+                        f"From '{chunk.get('title', 'Unknown')}': \n{chunk.get('text', chunk.get('excerpt', ''))}"
+                        for chunk in relevant_chunks
+                        if isinstance(chunk, dict)
+                    ])
+                except Exception as e:
+                    logger.error(f"Error building context text: {e}", exc_info=True)
+                    context_text = None
+
+                # Generate answer using OpenAI with retrieved context
+                if context_text:
+                    from agentic_research.core.config import get_settings
+                    settings = get_settings()
+                    openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+                    logger.info(f"Generating answer with {len(context_text)} chars of context")
+                    response = openai_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are a research assistant. Answer questions based on the provided research paper excerpts. Be concise and cite specific papers when making claims."
+                            },
+                            {
+                                "role": "user",
+                                "content": f"""Answer this question using the research paper excerpts below:
+
+Question: {request.question}
+
+Research Context:
+{context_text}
+
+Provide a clear, evidence-based answer citing the papers."""
+                        }
+                    ],
+                    temperature=0.3,
+                    max_tokens=800
+                )
+
+                answer = response.choices[0].message.content
+
+                # Generate follow-up questions
+                followup_response = openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"""Based on this Q&A, suggest 3 specific follow-up questions:
+
+Question: {request.question}
+Answer: {answer[:200]}...
+
+Generate 3 thoughtful follow-up questions."""
+                        }
+                    ],
+                    temperature=0.7,
+                    max_tokens=200
+                )
+
+                followup_text = followup_response.choices[0].message.content
+                followup_questions = [
+                    line.strip().lstrip('123.-')
+                    for line in followup_text.split('\n')
+                    if line.strip() and len(line.strip()) > 10
+                ][:3]
+
+            else:
+                answer = f"""I don't have enough information in my knowledge base to answer "{request.question}" with confidence.
+
+This could mean:
+1. No papers have been indexed yet that cover this topic
+2. The question is outside the scope of the current paper collection
+3. Try searching for relevant papers first using the search feature
+
+Once you've found and indexed some papers on this topic, I'll be able to provide detailed answers based on their content."""
+                followup_questions = [
+                    f"Search for papers about {request.question}",
+                    "What topics do you have papers about?",
+                    "How can I add more papers to the knowledge base?"
+                ]
+
+            # Convert chunks to source citations
+            mock_sources = [
+                {
+                    "title": chunk.get("title", "Unknown"),
+                    "paper_id": chunk.get("paper_id", ""),
+                    "chunk_index": chunk.get("chunk_index", 0),
+                    "relevance_score": chunk.get("relevance_score", 0.0),
+                    "excerpt": (chunk.get("excerpt") or chunk.get("text") or "")[:500]
+                }
+                for chunk in relevant_chunks
+            ]
+            
+            # Convert to API models
+            source_citations = _convert_to_source_citations(mock_sources)
+            
+            # Calculate response time
+            response_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Update session status
+            _active_sessions[session_id]["status"] = "completed"
+            _active_sessions[session_id]["sources_used"] = len(source_citations)
+            
+            # Calculate confidence score based on source relevance
+            confidence_score = (
+                sum(s["relevance_score"] for s in mock_sources) / len(mock_sources)
+                if mock_sources else 0.0
+            )
+
+            response = QuestionResponse(
+                question=request.question,
+                answer=answer,
+                sources=source_citations,
+                followup_questions=followup_questions,
+                confidence_score=confidence_score,
+                response_time_ms=response_time_ms,
+                personalization_applied=bool(request.user_id),
+                conversation_id=request.conversation_id,
+                agent_metadata={
+                    "session_id": session_id,
+                    "distributed": agents_ready,
+                    "context_sources": len(source_citations),
+                    "user_personalization": bool(request.user_id),
+                    "vector_search": True,
+                    "sources_retrieved": len(relevant_chunks)
+                }
+            )
+            
+            logger.info(
+                "Q&A request completed",
+                session_id=session_id,
+                sources_used=len(source_citations),
+                response_time_ms=response_time_ms,
+                confidence=response.confidence_score
+            )
+            
+            return response
+            
+        finally:
+            # Clean up session tracking
+            if session_id in _active_sessions:
+                _active_sessions[session_id]["completed_at"] = time.time()
+        
+    except Exception as e:
+        import traceback
+        full_traceback = traceback.format_exc()
+        logger.error("Q&A request failed",
+                    session_id=session_id,
+                    error=str(e),
+                    traceback=full_traceback,
+                    exc_info=True)
+
+        # Update session status
+        if session_id in _active_sessions:
+            _active_sessions[session_id]["status"] = "error"
+            _active_sessions[session_id]["error"] = str(e)
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Q&A request failed: {str(e)}"
+        )
+
+
+@router.post("/research-and-ask", response_model=Dict[str, Any], summary="Combined research and Q&A")
+async def research_and_ask(
+    query: ResearchQuery,
+    question: QuestionRequest,
+    background_tasks: BackgroundTasks
+) -> Dict[str, Any]:
+    """
+    Combined workflow: search for papers and then ask questions about them.
+    
+    This endpoint demonstrates the full research workflow:
+    1. Search for relevant papers using the research agent
+    2. Process and analyze the found papers
+    3. Answer questions using the processed knowledge
+    
+    This showcases how Praval agents can self-organize to handle
+    complex, multi-step research tasks autonomously.
+    """
+    session_id = str(uuid.uuid4())
+    start_time = time.time()
+    
+    try:
+        logger.info(
+            "Starting combined research workflow",
+            session_id=session_id,
+            query=query.query,
+            question=question.question
+        )
+        
+        # Ensure agents are initialized
+        background_tasks.add_task(_initialize_agents_if_needed)
+        
+        # Track session
+        _active_sessions[session_id] = {
+            "type": "research_and_ask",
+            "query": query.query,
+            "question": question.question,
+            "started_at": time.time(),
+            "status": "running"
+        }
+        
+        try:
+            # Initialize agents if needed
+            agents_ready = await _initialize_agents_if_needed()
+            
+            # NOTE: Praval broadcast() can only be called from @agent functions
+            # Agents run separately in research_agents container
+            # For now, returning workflow initiation status
+
+            logger.info("Combined research workflow initiated",
+                       query=query.query,
+                       question=question.question,
+                       agents_ready=agents_ready)
+            
+            # Calculate response time
+            response_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Update session status
+            _active_sessions[session_id]["status"] = "completed"
+            
+            # Return combined results
+            combined_response = {
+                "session_id": session_id,
+                "research_query": query.query,
+                "question": question.question,
+                "workflow_initiated": True,
+                "response_time_ms": response_time_ms,
+                "agent_metadata": {
+                    "praval_agents": agents_ready,
+                    "workflow_type": "autonomous_research_and_qa",
+                    "self_organizing": True,
+                    "agents_count": 6
+                }
+            }
+            
+            logger.info(
+                "Combined research workflow completed",
+                session_id=session_id,
+                response_time_ms=response_time_ms
+            )
+            
+            return combined_response
+            
+        finally:
+            # Clean up session tracking
+            if session_id in _active_sessions:
+                _active_sessions[session_id]["completed_at"] = time.time()
+        
+    except Exception as e:
+        logger.error("Combined research workflow failed", session_id=session_id, error=str(e))
+        
+        # Update session status
+        if session_id in _active_sessions:
+            _active_sessions[session_id]["status"] = "error"
+            _active_sessions[session_id]["error"] = str(e)
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Combined research workflow failed: {str(e)}"
+        )
+
+
+@router.get("/sessions", summary="Get active research sessions")
+async def get_active_sessions() -> Dict[str, Any]:
+    """
+    Get information about currently active research sessions.
+    
+    Useful for monitoring and debugging research workflows.
+    """
+    try:
+        # Clean up old sessions (older than 1 hour)
+        current_time = time.time()
+        expired_sessions = [
+            session_id for session_id, session_data in _active_sessions.items()
+            if current_time - session_data.get("started_at", 0) > 3600
+        ]
+        
+        for session_id in expired_sessions:
+            del _active_sessions[session_id]
+        
+        # Return active sessions
+        return {
+            "active_sessions": len(_active_sessions),
+            "sessions": _active_sessions,
+            "cleaned_expired": len(expired_sessions)
+        }
+        
+    except Exception as e:
+        logger.error("Failed to get active sessions", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get active sessions: {str(e)}"
+        )
+
+from pydantic import BaseModel
+
+class IndexRequest(BaseModel):
+    papers: List[Dict[str, Any]]
+
+@router.post("/index", summary="Index selected papers for deep Q&A")
+async def index_papers(
+    request: IndexRequest,
+    background_tasks: BackgroundTasks
+) -> Dict[str, Any]:
+    """
+    Index selected papers by triggering the Document Processor Agent.
+
+    This endpoint:
+    - Accepts a list of selected papers from the frontend
+    - Publishes a papers_found message to trigger document processing
+    - Document Processor Agent downloads PDFs, extracts text, generates embeddings
+    - Stores vectors in Qdrant for semantic search and Q&A
+
+    This is the agentic approach - we leverage the existing agent workflow!
+    """
+    session_id = str(uuid.uuid4())
+    start_time = time.time()
+
+    try:
+        papers = request.papers
+        logger.info(
+            "Indexing selected papers",
+            session_id=session_id,
+            paper_count=len(papers)
+        )
+
+        # Publish papers_found message directly to document processor channel
+        from praval import get_reef
+        reef = get_reef()
+
+        # Format payload for document processor
+        broadcast_payload = {
+            "type": "papers_found",
+            "papers": papers,
+            "original_query": f"User selected {len(papers)} papers for indexing",
+            "optimized_query": "manual_selection",
+            "search_metadata": {
+                "domain": "user_selected",
+                "optimization_used": False,
+                "results_count": len(papers),
+                "quality_threshold": 0.0,
+                "memory_contexts_used": 0,
+                "manual_selection": True
+            }
+        }
+
+        # Broadcast to document processor agent channel
+        broadcast_result = reef.broadcast(
+            from_agent='api_manual_index',
+            knowledge=broadcast_payload,
+            channel='document_processor_channel'
+        )
+
+        logger.info(
+            "Triggered document processor agent",
+            session_id=session_id,
+            broadcast_id=broadcast_result,
+            papers=len(papers)
+        )
+
+        response_time = int((time.time() - start_time) * 1000)
+
+        return {
+            "status": "indexing_started",
+            "session_id": session_id,
+            "papers_submitted": len(papers),
+            "broadcast_id": broadcast_result,
+            "message": f"Document Processor Agent triggered for {len(papers)} papers. Processing in background...",
+            "response_time_ms": response_time,
+            "note": "Papers will be downloaded, processed, and indexed. Check Q&A functionality in ~30-60 seconds."
+        }
+
+    except Exception as e:
+        logger.error(
+            "Indexing failed",
+            session_id=session_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Indexing failed: {str(e)}"
+        )
+
+
+# Knowledge Base Management Endpoints
+
+@router.get("/knowledge-base/papers", summary="List all indexed papers")
+async def list_indexed_papers() -> Dict[str, Any]:
+    """
+    Get a list of all papers currently indexed in the knowledge base.
+
+    Returns metadata for each paper including title, authors, chunk count, etc.
+    This provides visibility into what's available for Q&A.
+    """
+    try:
+        from agentic_research.storage.qdrant_client import QdrantClientWrapper
+
+        qdrant = QdrantClientWrapper()
+        papers = qdrant.get_all_papers()
+
+        total_vectors = sum(p.get('chunk_count', 0) for p in papers)
+
+        logger.info(
+            "Listed all indexed papers",
+            total_papers=len(papers),
+            total_vectors=total_vectors
+        )
+
+        return {
+            "papers": papers,
+            "total_papers": len(papers),
+            "total_vectors": total_vectors,
+            "status": "success"
+        }
+
+    except Exception as e:
+        logger.error("Failed to list papers", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve papers: {str(e)}"
+        )
+
+
+@router.delete("/knowledge-base/papers/{paper_id}", summary="Delete a paper from knowledge base")
+async def delete_paper(paper_id: str) -> Dict[str, Any]:
+    """
+    Delete a specific paper and all its vectors from the knowledge base.
+
+    Args:
+        paper_id: The ArXiv ID or unique identifier of the paper to delete
+
+    This removes all chunks/vectors associated with the paper from Qdrant.
+    """
+    try:
+        from agentic_research.storage.qdrant_client import QdrantClientWrapper
+
+        qdrant = QdrantClientWrapper()
+
+        # Count chunks before deletion
+        chunk_count = qdrant.count_paper_chunks(paper_id)
+
+        # Delete all vectors for this paper
+        qdrant.delete_vectors(paper_id)
+
+        logger.info(
+            "Deleted paper from knowledge base",
+            paper_id=paper_id,
+            chunks_deleted=chunk_count
+        )
+
+        return {
+            "paper_id": paper_id,
+            "vectors_deleted": chunk_count,
+            "status": "deleted",
+            "message": f"Successfully deleted paper '{paper_id}' and {chunk_count} associated vectors"
+        }
+
+    except Exception as e:
+        logger.error(
+            "Failed to delete paper",
+            paper_id=paper_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete paper: {str(e)}"
+        )
+
+
+@router.delete("/knowledge-base/clear", summary="Clear entire knowledge base")
+async def clear_knowledge_base() -> Dict[str, Any]:
+    """
+    Clear the entire knowledge base (delete all papers and vectors).
+
+    WARNING: This action cannot be undone! All indexed papers will be removed.
+    The collection will be recreated empty and ready for new papers.
+    """
+    try:
+        from agentic_research.storage.qdrant_client import QdrantClientWrapper
+
+        qdrant = QdrantClientWrapper()
+
+        # Get count before clearing
+        papers = qdrant.get_all_papers()
+        total_papers = len(papers)
+        total_vectors = sum(p.get('chunk_count', 0) for p in papers)
+
+        # Clear the collection
+        qdrant.clear_collection()
+
+        logger.warning(
+            "Knowledge base cleared",
+            papers_deleted=total_papers,
+            vectors_deleted=total_vectors
+        )
+
+        return {
+            "status": "cleared",
+            "papers_deleted": total_papers,
+            "vectors_deleted": total_vectors,
+            "message": "Knowledge base has been completely cleared. All papers and vectors have been deleted."
+        }
+
+    except Exception as e:
+        logger.error("Failed to clear knowledge base", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to clear knowledge base: {str(e)}"
+        )
+
+
+@router.get("/knowledge-base/stats", summary="Get knowledge base statistics")
+async def get_kb_stats() -> Dict[str, Any]:
+    """
+    Get statistics about the knowledge base.
+
+    Returns aggregated stats including paper count, vector count,
+    average chunks per paper, and category distribution.
+    """
+    try:
+        from agentic_research.storage.qdrant_client import QdrantClientWrapper
+
+        qdrant = QdrantClientWrapper()
+        papers = qdrant.get_all_papers()
+
+        # Calculate statistics
+        total_chunks = sum(p.get('chunk_count', 0) for p in papers)
+
+        # Count categories
+        categories = {}
+        for paper in papers:
+            for cat in paper.get('categories', []):
+                categories[cat] = categories.get(cat, 0) + 1
+
+        # Sort categories by count and get top 10
+        top_categories = dict(sorted(categories.items(), key=lambda x: x[1], reverse=True)[:10])
+
+        logger.info(
+            "Generated knowledge base statistics",
+            total_papers=len(papers),
+            total_vectors=total_chunks
+        )
+
+        return {
+            "total_papers": len(papers),
+            "total_vectors": total_chunks,
+            "avg_chunks_per_paper": round(total_chunks / len(papers), 1) if papers else 0,
+            "categories": top_categories,
+            "status": "success"
+        }
+
+    except Exception as e:
+        logger.error("Failed to get stats", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve statistics: {str(e)}"
+        )
