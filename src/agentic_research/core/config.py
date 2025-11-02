@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     """Application settings with environment variable support."""
     
     # Core Application
-    APP_NAME: str = Field(default="agentic_deep_research", env="APP_NAME")
+    APP_NAME: str = Field(default="praval_deep_research", env="APP_NAME")
     APP_VERSION: str = Field(default="1.0.0", env="APP_VERSION")
     DEBUG: bool = Field(default=False, env="DEBUG")
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")

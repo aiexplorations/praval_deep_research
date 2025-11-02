@@ -13,7 +13,7 @@ services:
       - "8000:8000"
     environment:
       # Application
-      APP_NAME: agentic_deep_research
+      APP_NAME: praval_deep_research
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ENVIRONMENT: ${ENVIRONMENT:-development}
 
@@ -68,7 +68,7 @@ services:
     container_name: research_agents
     environment:
       # Application
-      APP_NAME: agentic_deep_research_agents
+      APP_NAME: praval_deep_research_agents
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ENVIRONMENT: ${ENVIRONMENT:-development}
 

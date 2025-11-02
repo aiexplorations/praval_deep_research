@@ -34,7 +34,7 @@ class TestSettings:
         from agentic_research.core.config import Settings
         settings = Settings()
         
-        assert settings.APP_NAME == 'agentic_deep_research'
+        assert settings.APP_NAME == 'praval_deep_research'
         assert settings.DEBUG is False
         assert settings.LOG_LEVEL == 'INFO'
         assert settings.PRAVAL_MAX_THREADS == 10
