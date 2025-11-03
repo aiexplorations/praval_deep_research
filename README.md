@@ -12,6 +12,11 @@
   </a>
 </p>
 
+[![CI/CD Pipeline](https://github.com/aiexplorations/praval_deep_research/actions/workflows/ci.yml/badge.svg)](https://github.com/aiexplorations/praval_deep_research/actions/workflows/ci.yml)
+[![Code Quality](https://img.shields.io/badge/code%20quality-ruff%20%7C%20black%20%7C%20mypy-blue)](https://github.com/aiexplorations/praval_deep_research/blob/main/.pre-commit-config.yaml)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Built with the [Praval Agentic Framework](https://pravalagents.com) - demonstrating production-grade, identity-driven agent architecture for intelligent research workflows.
 
 </div>
@@ -302,42 +307,69 @@ curl http://localhost:8000/research/knowledge-base/papers | jq
 
 ## 🧪 Development
 
+For comprehensive development guidelines, see **[DEVELOPMENT.md](DEVELOPMENT.md)**.
+
+### Quick Developer Setup
+
+```bash
+# Clone and setup
+git clone https://github.com/aiexplorations/praval_deep_research.git
+cd praval_deep_research
+
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+
+# Install pre-commit hooks
+pre-commit install
+```
+
+### Code Quality Tools
+
+```bash
+# Format code automatically
+./scripts/format.sh
+
+# Run linting checks
+./scripts/lint.sh
+
+# Run tests with linting
+./scripts/test.sh --with-lint
+```
+
 ### Local Development (Without Docker)
 
 ```bash
-# Install dependencies
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
 # Start infrastructure only
 docker-compose up -d rabbitmq qdrant minio redis
 
-# Run API
+# Run API (terminal 1)
 cd src
 python -m uvicorn agentic_research.api.main:app --reload --port 8000
 
-# Run agents (separate terminal)
+# Run agents (terminal 2)
 python run_agents.py
 
-# Serve frontend (separate terminal)
+# Serve frontend (terminal 3)
 cd frontend
 python -m http.server 3000
 ```
 
-### Testing
+### CI/CD
 
-```bash
-# Test paper search
-curl -X POST http://localhost:8000/research/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "neural networks", "domain": "computer_science", "max_results": 3}'
+All pull requests to `main` run automated checks:
+- ✅ Ruff linting (PEP8 compliance)
+- ✅ Black formatting check
+- ✅ MyPy type checking
+- ✅ Bandit security scan
+- ✅ Full test suite with coverage
+- ✅ Multi-Python version testing (3.9, 3.10, 3.11)
 
-# Test Q&A
-curl -X POST http://localhost:8000/research/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What are transformers?"}'
-```
+See [.github/workflows/ci.yml](.github/workflows/ci.yml) for complete pipeline details.
 
 ---
 
