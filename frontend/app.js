@@ -6,6 +6,9 @@ const API_BASE_URL = window.location.hostname === 'localhost'
 // SSE Connection
 let sseConnection = null;
 
+// Message ID counter to ensure uniqueness
+let messageCounter = 0;
+
 // Connect to SSE for real-time agent updates
 function connectSSE() {
     const statusIndicator = document.getElementById('status-indicator');
@@ -394,10 +397,16 @@ function formatBibTeX(sources) {
 }
 
 // Copy message with citations to clipboard
-async function copyWithCitations(messageId, content, sources) {
-    const copyButton = document.querySelector(`#${messageId} .copy-button`);
+async function copyWithCitations(messageId) {
+    const messageElement = document.getElementById(messageId);
+    const copyButton = messageElement.querySelector('.copy-button');
 
     try {
+        // Get content and sources from data attributes
+        const content = messageElement.dataset.content || '';
+        const sourcesJson = messageElement.dataset.sources || '[]';
+        const sources = JSON.parse(sourcesJson);
+
         // Format the content with citations
         let textToCopy = content + '\n\n';
 
@@ -433,7 +442,7 @@ async function copyWithCitations(messageId, content, sources) {
 // Add message to chat
 function addMessage(role, content, isLoading = false, sources = null, followups = null) {
     const chatMessages = document.getElementById('chat-messages');
-    const messageId = `msg-${Date.now()}`;
+    const messageId = `msg-${Date.now()}-${messageCounter++}`;
 
     const messageClass = role === 'user' ? 'message-user' : 'message-assistant';
     const alignment = role === 'user' ? 'justify-end' : 'justify-start';
@@ -463,7 +472,7 @@ function addMessage(role, content, isLoading = false, sources = null, followups 
     const copyButtonHtml = (role === 'assistant' && !isLoading) ? `
         <div class="flex justify-end mt-2">
             <button
-                onclick="copyWithCitations('${messageId}', \`${escapeHtml(content).replace(/`/g, '\\`')}\`, ${JSON.stringify(sources || []).replace(/"/g, '&quot;')})"
+                onclick="copyWithCitations('${messageId}')"
                 class="copy-button text-xs px-3 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
                 title="Copy answer with BibTeX citations"
             >
@@ -473,7 +482,7 @@ function addMessage(role, content, isLoading = false, sources = null, followups 
     ` : '';
 
     const messageHtml = `
-        <div id="${messageId}" class="flex ${alignment}">
+        <div id="${messageId}" class="flex ${alignment}" data-content="${escapeHtml(content)}" data-sources="${escapeHtml(JSON.stringify(sources || []))}">
             <div class="${messageClass} rounded-lg px-4 py-3 max-w-2xl ${isLoading ? 'animate-pulse' : ''}">
                 ${contentHtml}
                 ${sourcesHtml}
