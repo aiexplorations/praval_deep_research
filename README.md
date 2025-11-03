@@ -1,8 +1,20 @@
-# 🔬 Praval Deep Research
+<div align="center">
+
+<img src="praval_deep_research_logo.png" alt="Praval Deep Research Logo" width="200"/>
+
+# Praval Deep Research
 
 **A Local-First, AI-Powered Research Assistant for ArXiv Papers**
 
+<p align="center">
+  <a href="https://pravalagents.com">
+    <img src="frontend/assets/praval_logo.png" alt="Built with Praval" width="120"/>
+  </a>
+</p>
+
 Built with the [Praval Agentic Framework](https://pravalagents.com) - demonstrating production-grade, identity-driven agent architecture for intelligent research workflows.
+
+</div>
 
 ---
 
