@@ -48,6 +48,7 @@ TEST_TYPE="all"
 COVERAGE=true
 VERBOSE=false
 FAIL_FAST=false
+WITH_LINT=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -71,13 +72,41 @@ while [[ $# -gt 0 ]]; do
             FAIL_FAST=true
             shift
             ;;
+        --with-lint)
+            WITH_LINT=true
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--unit|--integration] [--no-coverage] [--verbose] [--fail-fast]"
+            echo "Usage: $0 [--unit|--integration] [--no-coverage] [--verbose] [--fail-fast] [--with-lint]"
             exit 1
             ;;
     esac
 done
+
+# Run linting if requested
+if [ "$WITH_LINT" = true ]; then
+    echo -e "${BLUE}Running code quality checks before tests...${NC}"
+    echo ""
+
+    if [ -f "./scripts/lint.sh" ]; then
+        ./scripts/lint.sh
+        LINT_EXIT_CODE=$?
+
+        if [ $LINT_EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo -e "${RED}Linting failed. Fix code quality issues before running tests.${NC}"
+            exit 1
+        fi
+
+        echo ""
+        echo -e "${GREEN}✓ All linting checks passed. Proceeding with tests...${NC}"
+        echo ""
+    else
+        echo -e "${YELLOW}Warning: lint.sh not found, skipping linting${NC}"
+        echo ""
+    fi
+fi
 
 # Build pytest command
 PYTEST_CMD="pytest"
