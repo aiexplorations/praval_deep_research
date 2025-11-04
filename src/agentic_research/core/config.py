@@ -58,7 +58,11 @@ class Settings(BaseSettings):
     MINIO_SECURE: bool = Field(default=False, env="MINIO_SECURE")
     
     REDIS_URL: str = Field(default="redis://localhost:6379", env="REDIS_URL")
-    
+    DATABASE_URL: str = Field(
+        default="postgresql+asyncpg://research_user:research_pass@localhost:5432/praval_research",
+        env="DATABASE_URL"
+    )
+
     # ArXiv Configuration
     ARXIV_BASE_URL: str = Field(
         default="http://export.arxiv.org/api/query",

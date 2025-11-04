@@ -35,10 +35,12 @@ from processors.arxiv_client import (
 from praval import start_agents
 from ...core.messaging import get_publisher
 from ...storage.vector_search import get_vector_search_client
+from ...core.config import get_settings
 from openai import OpenAI
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/research", tags=["research"])
+settings = get_settings()
 
 
 def generate_conversation_title(question: str, answer: str) -> str:
@@ -810,6 +812,16 @@ async def index_papers(
             papers=len(papers)
         )
 
+        # Invalidate research insights cache (papers added, insights need refresh)
+        try:
+            import redis.asyncio as aioredis
+            redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            await redis_client.delete("research_insights:v1")
+            await redis_client.close()
+            logger.debug("Invalidated research insights cache after indexing")
+        except Exception as e:
+            logger.warning(f"Failed to invalidate insights cache: {e}")
+
         response_time = int((time.time() - start_time) * 1000)
 
         return {
@@ -1063,6 +1075,120 @@ async def get_paper_pdf(paper_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to serve PDF: {str(e)}"
+        )
+
+# ==========================================
+# Proactive Research Insights Endpoint
+# ==========================================
+
+@router.get("/insights", summary="Get proactive research insights")
+async def get_research_insights() -> Dict[str, Any]:
+    """
+    Generate proactive research insights based on knowledge base,
+    recent papers, and conversation history.
+
+    Returns:
+    - Research area clusters
+    - Trending topics/keywords
+    - Identified research gaps
+    - Personalized next steps
+    - Suggested papers from arXiv (not yet indexed)
+
+    Results are cached in Redis with 1-hour TTL.
+    """
+    try:
+        import redis.asyncio as aioredis
+        import json
+
+        # Check Redis cache first
+        redis_client = aioredis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            encoding="utf-8"
+        )
+
+        CACHE_KEY = "research_insights:v1"
+        CACHE_TTL = 3600  # 1 hour
+
+        # Try to get cached insights
+        cached_data = await redis_client.get(CACHE_KEY)
+        if cached_data:
+            logger.info("Returning cached research insights")
+            await redis_client.close()
+            return json.loads(cached_data)
+
+        logger.info("Generating fresh research insights...")
+
+        # Fetch recent chat history from PostgreSQL (async)
+        recent_queries = []
+        try:
+            from agentic_research.storage.conversation_store import get_conversation_store
+
+            store = get_conversation_store()
+            conversations = await store.list_conversations(limit=3, offset=0)
+
+            for conv in conversations:
+                messages = await store.get_messages(conv.id, limit=20)
+                user_messages = [msg.content for msg in messages if msg.role == 'user']
+                recent_queries.extend(user_messages)
+
+            recent_queries = recent_queries[:10]  # Max 10 recent queries
+            logger.info(f"Fetched {len(recent_queries)} recent queries from PostgreSQL")
+
+        except Exception as e:
+            logger.warning(f"Could not fetch chat history: {e}")
+            recent_queries = []
+
+        # Import the insights generation helper
+        from agents.interaction.research_advisor import generate_insights_sync
+
+        # Generate insights with chat history
+        insights = generate_insights_sync(settings, recent_queries=recent_queries)
+
+        # Cache the result
+        await redis_client.setex(
+            CACHE_KEY,
+            CACHE_TTL,
+            json.dumps(insights)
+        )
+        await redis_client.close()
+
+        logger.info(f"Generated and cached research insights: {insights['kb_context']['total_papers']} papers analyzed")
+
+        return insights
+
+    except ImportError as e:
+        # Fallback if agent not available
+        logger.warning(f"Could not import insights generator: {e}, returning basic stats")
+
+        from agentic_research.storage.qdrant_client import QdrantClientWrapper
+
+        qdrant = QdrantClientWrapper(settings)
+        kb_papers = qdrant.get_all_papers()
+
+        return {
+            "research_areas": [],
+            "trending_topics": [],
+            "research_gaps": [],
+            "next_steps": [],
+            "suggested_papers": [],
+            "kb_context": {
+                "total_papers": len(kb_papers),
+                "categories": {},
+                "recent_activity": False
+            },
+            "generation_metadata": {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "kb_papers_analyzed": len(kb_papers),
+                "insights_quality": "basic"
+            }
+        }
+
+    except Exception as e:
+        logger.error("Failed to generate research insights", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate insights: {str(e)}"
         )
 
 # ==========================================

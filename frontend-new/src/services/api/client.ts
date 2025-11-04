@@ -19,6 +19,7 @@ import type {
   Conversation,
   ConversationWithMessages,
   KnowledgeBaseStats,
+  ResearchInsights,
   APIError
 } from '../../types';
 
@@ -132,6 +133,12 @@ class APIClient {
   getPaperPdfUrl(paperId: string): string {
     // Return direct API endpoint for PDF viewing
     return `/api/research/knowledge-base/papers/${paperId}/pdf`;
+  }
+
+  // Proactive Research Insights
+  async getResearchInsights(): Promise<ResearchInsights> {
+    const response = await this.client.get<ResearchInsights>('/research/insights');
+    return response.data;
   }
 
   // Collections (to be implemented in backend)

@@ -178,13 +178,28 @@ class ConversationStore:
 _conversation_store: Optional[ConversationStore] = None
 
 
-def get_conversation_store() -> ConversationStore:
-    """Get or create the conversation store instance."""
-    global _conversation_store
-    if _conversation_store is None:
-        settings = get_settings()
-        redis_client = aioredis.from_url(
-            settings.REDIS_URL, encoding="utf-8", decode_responses=True
-        )
-        _conversation_store = ConversationStore(redis_client)
-    return _conversation_store
+def get_conversation_store():
+    """
+    Get conversation store instance - PostgreSQL by default, Redis as fallback.
+
+    Uses PostgreSQL for chat history (persistent, relational storage).
+    Falls back to Redis if PostgreSQL is unavailable or USE_REDIS_STORE=true.
+    """
+    import os
+
+    use_redis = os.getenv("USE_REDIS_STORE", "false").lower() == "true"
+
+    if use_redis:
+        # Use Redis implementation (legacy/fallback)
+        global _conversation_store
+        if _conversation_store is None:
+            settings = get_settings()
+            redis_client = aioredis.from_url(
+                settings.REDIS_URL, encoding="utf-8", decode_responses=True
+            )
+            _conversation_store = ConversationStore(redis_client)
+        return _conversation_store
+    else:
+        # Use PostgreSQL implementation (default)
+        from .pg_conversation_store import get_pg_conversation_store
+        return get_pg_conversation_store()

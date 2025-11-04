@@ -17,11 +17,10 @@ import type { Message, QuestionRequest } from '../types';
 export default function Chat() {
   const [question, setQuestion] = useState('');
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set());
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [showSidebar, setShowSidebar] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { messages, addMessage, clearMessages } = useChatStore();
+  const { currentConversationId, setCurrentConversation, messages, addMessage, clearMessages } = useChatStore();
 
   // Load conversations list
   const { data: conversationsData, refetch: refetchConversations } = useQuery({
@@ -37,7 +36,7 @@ export default function Chat() {
     mutationFn: (title?: string) => apiClient.createConversation(title),
     onSuccess: (data) => {
       console.log('New conversation created:', data);
-      setCurrentConversationId(data.id);
+      setCurrentConversation(data.id);
       clearMessages();
       refetchConversations();
     }
@@ -48,7 +47,7 @@ export default function Chat() {
     mutationFn: (id: string) => apiClient.getConversation(id),
     onSuccess: (data) => {
       console.log('Loaded conversation:', data.id, 'with', data.messages?.length, 'messages');
-      setCurrentConversationId(data.id);
+      setCurrentConversation(data.id);
       clearMessages();
       // Load messages from conversation
       if (data.messages) {
@@ -73,7 +72,7 @@ export default function Chat() {
       // If we deleted the current conversation, clear messages and reset ID
       if (currentConversationId === deletedId) {
         clearMessages();
-        setCurrentConversationId(null);
+        setCurrentConversation(null);
       }
       refetchConversations();
     }
@@ -159,7 +158,7 @@ export default function Chat() {
       try {
         const newConv = await apiClient.createConversation(question.trim().slice(0, 50));
         convId = newConv.id;
-        setCurrentConversationId(convId);
+        setCurrentConversation(convId);
         refetchConversations();
         console.log('Created conversation:', convId);
       } catch (error) {
@@ -192,13 +191,36 @@ export default function Chat() {
   const handleClearChat = () => {
     if (confirm('Clear all messages?')) {
       clearMessages();
+      setCurrentConversation(null);
     }
   };
 
+  const copyWithCitations = (message: Message) => {
+    let textToCopy = message.content;
+
+    if (message.sources && message.sources.length > 0) {
+      textToCopy += '\n\n---\nSources:\n';
+      message.sources.forEach((source, idx) => {
+        textToCopy += `\n[${idx + 1}] ${source.title}`;
+        if (source.paper_id) {
+          textToCopy += ` (arXiv:${source.paper_id})`;
+        }
+        if (source.relevance_score) {
+          textToCopy += ` - Relevance: ${(source.relevance_score * 100).toFixed(0)}%`;
+        }
+      });
+    }
+
+    navigator.clipboard.writeText(textToCopy).then(() => {
+      // Could show a toast notification here
+      console.log('Copied with citations!');
+    });
+  };
+
   return (
-    <div className="flex h-[calc(100vh-4rem)] bg-background">
+    <div className="flex h-screen bg-background">
       {/* Conversation Sidebar */}
-      <div className={`${showSidebar ? 'w-64' : 'w-0'} border-r border-border bg-card transition-all duration-300 overflow-hidden flex flex-col`}>
+      <div className={`${showSidebar ? 'w-64' : 'w-0'} border-r border-border bg-card transition-all duration-300 overflow-hidden flex flex-col shrink-0`}>
         <div className="p-4 border-b border-border">
           <button
             onClick={handleNewChat}
@@ -262,10 +284,10 @@ export default function Chat() {
       </div>
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
-        <div className="container mx-auto px-4 py-6 max-w-4xl flex-1 flex flex-col">
-          {/* Header */}
-          <div className="mb-6 flex items-center justify-between">
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <div className="border-b border-border px-6 py-4 shrink-0">
+          <div className="container mx-auto max-w-4xl flex items-center justify-between">
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setShowSidebar(!showSidebar)}
@@ -289,9 +311,11 @@ export default function Chat() {
               </button>
             )}
           </div>
+        </div>
 
-          {/* Messages Container */}
-          <div className="flex-1 overflow-y-auto mb-6 space-y-6">
+        {/* Messages Container - Scrollable */}
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <div className="container mx-auto px-6 py-6 max-w-4xl space-y-6 min-h-full">
             {messages.length === 0 ? (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center text-muted-foreground max-w-md">
@@ -323,6 +347,19 @@ export default function Chat() {
                         {message.content}
                       </ReactMarkdown>
                     </div>
+
+                    {/* Copy with Citations button for assistant messages */}
+                    {message.role === 'assistant' && (
+                      <div className="mt-3 pt-3 border-t border-border/30">
+                        <button
+                          onClick={() => copyWithCitations(message)}
+                          className="text-xs px-3 py-1.5 bg-muted hover:bg-muted/80 rounded transition-colors flex items-center gap-1"
+                          title="Copy answer with source citations"
+                        >
+                          📋 Copy with Citations
+                        </button>
+                      </div>
+                    )}
 
                     {/* Sources */}
                     {message.sources && message.sources.length > 0 && (
@@ -389,9 +426,11 @@ export default function Chat() {
 
             <div ref={messagesEndRef} />
           </div>
+        </div>
 
-          {/* Input Form */}
-          <form onSubmit={handleSubmit} className="flex gap-2">
+        {/* Input Form - Fixed at bottom */}
+        <div className="border-t border-border px-6 py-4 bg-background shrink-0">
+          <form onSubmit={handleSubmit} className="container mx-auto max-w-4xl flex gap-2">
             <input
               type="text"
               value={question}

@@ -59,7 +59,21 @@ async def _check_infrastructure() -> Dict[str, str]:
     except Exception as e:
         logger.warning("Redis health check failed", error=str(e))
         infrastructure_status["redis"] = "disconnected"
-    
+
+    # Check PostgreSQL
+    try:
+        from ...db.base import get_session_maker
+        session_maker = get_session_maker()
+        async with session_maker() as session:
+            # Execute a simple query to verify connection
+            from sqlalchemy import text
+            result = await session.execute(text("SELECT 1"))
+            result.scalar()
+        infrastructure_status["postgresql"] = "connected"
+    except Exception as e:
+        logger.warning("PostgreSQL health check failed", error=str(e))
+        infrastructure_status["postgresql"] = "disconnected"
+
     return infrastructure_status
 
 
@@ -199,11 +213,12 @@ async def agents_health() -> List[AgentStatus]:
 async def infrastructure_health() -> Dict[str, str]:
     """
     Check connectivity to external infrastructure components.
-    
+
     Returns connection status for:
     - RabbitMQ message broker
     - Qdrant vector database
     - Redis cache
+    - PostgreSQL database
     """
     try:
         infrastructure = await _check_infrastructure()
