@@ -26,7 +26,7 @@ Built with the [Praval Agentic Framework](https://pravalagents.com) - demonstrat
 
 ## 🎯 What Is This?
 
-Praval Deep Research is a **completely local**, privacy-focused research assistant that helps you discover, analyze, and understand academic papers from ArXiv. Unlike cloud-based solutions, all your research data stays on your machine, with intelligent multi-agent processing powered by the Praval framework.
+Praval Deep Research is a **local-first**, privacy-focused research assistant that helps you discover, analyze, and understand academic papers from ArXiv. All your research data stays on your machine - papers, embeddings, conversations, and insights are stored locally. LLM processing uses OpenAI API (local model support with Ollama planned for future releases).
 
 <div align="center">
 <img src="img/pdr_01.png" alt="Praval Deep Research Interface" width="800"/>
@@ -36,10 +36,11 @@ Praval Deep Research is a **completely local**, privacy-focused research assista
 ### Core Philosophy
 
 **Local-First Architecture**
-- All data processing happens on your infrastructure
-- Papers and embeddings stored in local vector database
+- All data stored on your infrastructure (PostgreSQL, Qdrant, MinIO, Redis)
+- Papers and embeddings remain on your machine
 - Complete control over your research knowledge base
-- No external dependencies except ArXiv API and LLM providers
+- External API calls only for ArXiv paper downloads and OpenAI LLM/embeddings
+- Local model support (Ollama) planned for fully offline operation
 
 **Agent-Driven Intelligence**
 - Built on [Praval](https://pravalagents.com) - the modern agentic framework
