@@ -5,7 +5,8 @@
  * request/response interceptors, and retry logic.
  */
 
-import axios, { AxiosInstance, AxiosError, AxiosRequestConfig } from 'axios';
+import axios from 'axios';
+import type { AxiosInstance, AxiosError } from 'axios';
 import type {
   PaperSearchRequest,
   PaperSearchResponse,
@@ -128,6 +129,11 @@ class APIClient {
     return response.data;
   }
 
+  getPaperPdfUrl(paperId: string): string {
+    // Return direct API endpoint for PDF viewing
+    return `/api/research/knowledge-base/papers/${paperId}/pdf`;
+  }
+
   // Collections (to be implemented in backend)
   async listCollections(): Promise<Collection[]> {
     const response = await this.client.get<Collection[]>('/collections');
@@ -183,26 +189,31 @@ class APIClient {
     return response.data;
   }
 
-  // Conversations (to be implemented in backend)
-  async listConversations(): Promise<Conversation[]> {
-    const response = await this.client.get<Conversation[]>('/conversations');
+  // Conversations
+  async listConversations(): Promise<{ conversations: Conversation[] }> {
+    const response = await this.client.get<{ conversations: Conversation[] }>('/research/conversations');
     return response.data;
   }
 
   async getConversation(id: string): Promise<ConversationWithMessages> {
     const response = await this.client.get<ConversationWithMessages>(
-      `/conversations/${id}`
+      `/research/conversations/${id}`
     );
     return response.data;
   }
 
-  async createConversation(title: string): Promise<Conversation> {
-    const response = await this.client.post<Conversation>('/conversations', { title });
+  async createConversation(title?: string): Promise<Conversation> {
+    const response = await this.client.post<Conversation>('/research/conversations', { title });
     return response.data;
   }
 
   async deleteConversation(id: string): Promise<{ message: string }> {
-    const response = await this.client.delete(`/conversations/${id}`);
+    const response = await this.client.delete(`/research/conversations/${id}`);
+    return response.data;
+  }
+
+  async updateConversationTitle(id: string, title: string): Promise<{ message: string }> {
+    const response = await this.client.put(`/research/conversations/${id}`, { title });
     return response.data;
   }
 

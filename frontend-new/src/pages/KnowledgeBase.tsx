@@ -64,6 +64,12 @@ export default function KnowledgeBase() {
     }
   };
 
+  const handleViewPdf = (paperId: string) => {
+    // Open PDF directly through API endpoint
+    const pdfUrl = apiClient.getPaperPdfUrl(paperId);
+    window.open(pdfUrl, '_blank', 'noopener,noreferrer');
+  };
+
   const handleClearAll = () => {
     if (confirm('⚠️ This will delete ALL papers and vectors. Are you sure?')) {
       if (confirm('This action cannot be undone. Proceed?')) {
@@ -113,15 +119,28 @@ export default function KnowledgeBase() {
     columnHelper.display({
       id: 'actions',
       header: 'Actions',
-      cell: (info) => (
-        <button
-          onClick={() => handleDelete(info.row.original.id, info.row.original.title)}
-          disabled={deleteMutation.isPending}
-          className="text-xs px-2 py-1 text-destructive hover:bg-destructive/10 rounded transition-colors disabled:opacity-50"
-        >
-          Delete
-        </button>
-      )
+      cell: (info) => {
+        const paperId = info.row.original.paper_id || info.row.original.arxiv_id || '';
+        return (
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleViewPdf(paperId)}
+              disabled={!paperId}
+              className="text-xs px-3 py-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="View PDF"
+            >
+              📄 View PDF
+            </button>
+            <button
+              onClick={() => handleDelete(paperId, info.row.original.title)}
+              disabled={deleteMutation.isPending || !paperId}
+              className="text-xs px-2 py-1 text-destructive hover:bg-destructive/10 rounded transition-colors disabled:opacity-50"
+            >
+              Delete
+            </button>
+          </div>
+        );
+      }
     })
   ];
 

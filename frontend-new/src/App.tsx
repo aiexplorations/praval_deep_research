@@ -13,85 +13,47 @@ import Discover from './pages/Discover';
 import Chat from './pages/Chat';
 import KnowledgeBase from './pages/KnowledgeBase';
 
-// Dashboard (placeholder for now)
 const Dashboard = () => (
   <div className="container mx-auto px-4 py-8 max-w-4xl">
-    <h1 className="text-4xl font-bold mb-4">Praval Deep Research</h1>
+    <h1 className="text-4xl font-bold mb-2">Praval Deep Research</h1>
     <p className="text-muted-foreground mb-8">
-      Phase 2 Migration Complete! Core features are now functional. 🎉
+      AI-powered research assistant for academic papers
     </p>
 
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-      <div className="p-6 border border-border rounded-lg hover:shadow-md transition-shadow">
-        <h2 className="text-xl font-semibold mb-2">🔍 Discover Papers</h2>
-        <p className="text-sm text-muted-foreground mb-4">
-          Search ArXiv for research papers and index them for Q&A
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <Link
+        to="/discover"
+        className="p-6 border border-border rounded-lg hover:shadow-lg transition-all hover:border-primary"
+      >
+        <h2 className="text-xl font-semibold mb-2">Discover</h2>
+        <p className="text-sm text-muted-foreground">
+          Search and index ArXiv papers
         </p>
-        <Link
-          to="/discover"
-          className="text-primary hover:underline text-sm font-medium"
-        >
-          Start Searching →
-        </Link>
-      </div>
+      </Link>
 
-      <div className="p-6 border border-border rounded-lg hover:shadow-md transition-shadow">
-        <h2 className="text-xl font-semibold mb-2">💬 Research Chat</h2>
-        <p className="text-sm text-muted-foreground mb-4">
-          Ask questions about your indexed papers with semantic search
+      <Link
+        to="/chat"
+        className="p-6 border border-border rounded-lg hover:shadow-lg transition-all hover:border-primary"
+      >
+        <h2 className="text-xl font-semibold mb-2">Chat</h2>
+        <p className="text-sm text-muted-foreground">
+          Ask questions about your papers
         </p>
-        <Link
-          to="/chat"
-          className="text-primary hover:underline text-sm font-medium"
-        >
-          Start Chatting →
-        </Link>
-      </div>
+      </Link>
 
-      <div className="p-6 border border-border rounded-lg hover:shadow-md transition-shadow">
-        <h2 className="text-xl font-semibold mb-2">📚 Knowledge Base</h2>
-        <p className="text-sm text-muted-foreground mb-4">
-          Manage your indexed papers and view statistics
+      <Link
+        to="/knowledge-base"
+        className="p-6 border border-border rounded-lg hover:shadow-lg transition-all hover:border-primary"
+      >
+        <h2 className="text-xl font-semibold mb-2">Knowledge Base</h2>
+        <p className="text-sm text-muted-foreground">
+          Manage indexed papers
         </p>
-        <Link
-          to="/knowledge-base"
-          className="text-primary hover:underline text-sm font-medium"
-        >
-          View Papers →
-        </Link>
-      </div>
-
-      <div className="p-6 border border-border rounded-lg hover:shadow-md transition-shadow opacity-50">
-        <h2 className="text-xl font-semibold mb-2">⚙️ Settings</h2>
-        <p className="text-sm text-muted-foreground mb-4">
-          Configure preferences (Coming in Phase 8)
-        </p>
-      </div>
-    </div>
-
-    <div className="p-4 bg-muted rounded-lg text-sm">
-      <p className="font-medium mb-2">✨ Features Implemented:</p>
-      <ul className="space-y-1 text-muted-foreground">
-        <li>✅ Paper search from ArXiv with domain filtering</li>
-        <li>✅ Paper selection and indexing</li>
-        <li>✅ Q&A chat with source citations</li>
-        <li>✅ Knowledge Base table with search and sorting</li>
-        <li>✅ Responsive design (mobile-friendly)</li>
-        <li>✅ Dark mode ready</li>
-        <li>🔜 Collections & Tags (Phase 3)</li>
-        <li>🔜 Persistent Chat History (Phase 4)</li>
-        <li>🔜 AI Agents Integration (Phase 5)</li>
-      </ul>
+      </Link>
     </div>
   </div>
 );
 
-const Settings = () => (
-  <div className="p-8">
-    <h1 className="text-3xl font-bold">Settings</h1>
-    <p className="text-muted-foreground">Coming in Phase 8 - Advanced Features</p>
-  </div>
-);
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -110,12 +72,13 @@ function App() {
         <div className="min-h-screen bg-background text-foreground">
           <nav className="border-b p-4 bg-card">
             <div className="container mx-auto flex items-center justify-between">
-              <div className="flex gap-6">
+              <div className="flex gap-6 items-center">
                 <Link
                   to="/"
-                  className="font-semibold text-foreground hover:text-primary transition-colors"
+                  className="flex items-center gap-3 font-semibold text-foreground hover:text-primary transition-colors"
                 >
-                  Praval Research
+                  <img src="/praval_deep_research_logo.png" alt="Praval Logo" className="h-10 w-auto" />
+                  <span className="text-lg">Praval Deep Research</span>
                 </Link>
                 <Link
                   to="/discover"
@@ -135,16 +98,25 @@ function App() {
                 >
                   Knowledge Base
                 </Link>
-                <Link
-                  to="/settings"
-                  className="text-muted-foreground hover:text-primary transition-colors"
-                >
-                  Settings
-                </Link>
               </div>
-              <div className="text-sm text-muted-foreground">
-                v2.0 (React)
-              </div>
+
+              {/* Praval Branding - Top Right */}
+              <a
+                href="https://pravalagents.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-muted transition-all group"
+                title="Built with Praval - The Modern Agentic Framework"
+              >
+                <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors">
+                  Built with
+                </span>
+                <img
+                  src="/praval_logo.png"
+                  alt="Praval Framework"
+                  className="h-6 w-auto opacity-80 group-hover:opacity-100 transition-opacity"
+                />
+              </a>
             </div>
           </nav>
 
@@ -153,7 +125,6 @@ function App() {
             <Route path="/discover" element={<Discover />} />
             <Route path="/chat" element={<Chat />} />
             <Route path="/knowledge-base" element={<KnowledgeBase />} />
-            <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>

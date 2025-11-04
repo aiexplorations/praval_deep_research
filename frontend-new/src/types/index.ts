@@ -4,14 +4,15 @@
 
 // Paper types
 export interface Paper {
-  id: string;
+  arxiv_id?: string;  // For search results
+  paper_id?: string;  // For knowledge base papers
   title: string;
   authors: string[];
   abstract: string;
   categories: string[];
   published_date: string;
   url?: string;
-  pdf_url?: string;
+  venue?: string;
   relevance_score?: number;
   chunk_count?: number;
 }

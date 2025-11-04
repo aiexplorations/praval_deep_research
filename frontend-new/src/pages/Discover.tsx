@@ -14,6 +14,7 @@ export default function Discover() {
   const [domain, setDomain] = useState('computer_science');
   const [selectedPapers, setSelectedPapers] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState<Paper[]>([]);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Search mutation
   const searchMutation = useMutation({
@@ -21,6 +22,7 @@ export default function Discover() {
     onSuccess: (data) => {
       setSearchResults(data.papers);
       setSelectedPapers(new Set()); // Clear selection on new search
+      setSuccessMessage(null); // Clear any previous success message
     }
   });
 
@@ -28,8 +30,10 @@ export default function Discover() {
   const indexMutation = useMutation({
     mutationFn: (papers: Paper[]) => apiClient.indexPapers(papers),
     onSuccess: (data) => {
-      alert(`Successfully indexed ${data.indexed_count} papers! ${data.vectors_stored} vectors stored.`);
+      setSuccessMessage(`Successfully indexed ${data.indexed_count} papers! ${data.vectors_stored} vectors stored.`);
       setSelectedPapers(new Set());
+      // Auto-hide after 5 seconds
+      setTimeout(() => setSuccessMessage(null), 5000);
     }
   });
 
@@ -56,10 +60,9 @@ export default function Discover() {
   };
 
   const handleIndexSelected = () => {
-    const papersToIndex = searchResults.filter((p) => selectedPapers.has(p.id));
+    const papersToIndex = searchResults.filter((p) => p.arxiv_id && selectedPapers.has(p.arxiv_id));
     if (papersToIndex.length === 0) {
-      alert('Please select at least one paper to index');
-      return;
+      return; // Button is disabled when nothing is selected
     }
     indexMutation.mutate(papersToIndex);
   };
@@ -74,6 +77,22 @@ export default function Discover() {
             Search and index papers from ArXiv for semantic Q&A
           </p>
         </div>
+
+        {/* Success Message */}
+        {successMessage && (
+          <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-green-600 text-xl">✓</span>
+              <p className="text-green-800 font-medium">{successMessage}</p>
+            </div>
+            <button
+              onClick={() => setSuccessMessage(null)}
+              className="text-green-600 hover:text-green-800"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Search Form */}
         <form onSubmit={handleSearch} className="mb-8">
@@ -149,15 +168,16 @@ export default function Discover() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {searchResults.map((paper) => (
               <div
-                key={paper.id}
+                key={paper.arxiv_id}
                 className="border border-border rounded-lg p-6 bg-card hover:shadow-md transition-shadow"
               >
                 <div className="flex items-start gap-4">
                   <input
                     type="checkbox"
-                    checked={selectedPapers.has(paper.id)}
-                    onChange={() => togglePaperSelection(paper.id)}
-                    className="mt-1 h-4 w-4 rounded border-border"
+                    checked={paper.arxiv_id ? selectedPapers.has(paper.arxiv_id) : false}
+                    onChange={() => paper.arxiv_id && togglePaperSelection(paper.arxiv_id)}
+                    disabled={!paper.arxiv_id}
+                    className="mt-1 h-4 w-4 rounded border-border disabled:opacity-50"
                   />
                   <div className="flex-1">
                     <div className="flex items-start justify-between mb-2">

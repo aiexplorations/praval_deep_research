@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_NAME: str = Field(default="research_vectors", env="QDRANT_COLLECTION_NAME")
     
     MINIO_ENDPOINT: str = Field(default="localhost:9000", env="MINIO_ENDPOINT")
+    MINIO_EXTERNAL_ENDPOINT: str = Field(default="localhost:9000", env="MINIO_EXTERNAL_ENDPOINT")
     MINIO_ACCESS_KEY: str = Field(default="minioadmin", env="MINIO_ACCESS_KEY")
     MINIO_SECRET_KEY: str = Field(default="minioadmin", env="MINIO_SECRET_KEY")
     MINIO_BUCKET_NAME: str = Field(default="research-papers", env="MINIO_BUCKET_NAME")

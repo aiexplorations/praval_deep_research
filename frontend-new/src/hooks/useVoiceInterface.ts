@@ -13,6 +13,14 @@
 import { useState, useCallback, useEffect } from 'react';
 import { voiceConfig } from '../config/voice.config';
 
+// Extend Window interface for Web Speech API
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
+
 export interface VoiceState {
   isListening: boolean;
   isSpeaking: boolean;

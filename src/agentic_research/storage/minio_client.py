@@ -182,7 +182,7 @@ class MinIOClient:
             expiry_hours: URL expiration time in hours (default: 24)
 
         Returns:
-            Presigned URL for direct PDF download
+            Presigned URL for direct PDF download accessible from browser
 
         Raises:
             S3Error: If URL generation fails
@@ -195,6 +195,18 @@ class MinIOClient:
                 object_name=object_name,
                 expires=timedelta(hours=expiry_hours)
             )
+
+            # Replace internal Docker hostname with external endpoint for browser access
+            external_endpoint = self.settings.MINIO_EXTERNAL_ENDPOINT
+            internal_endpoint = self.settings.MINIO_ENDPOINT
+
+            if internal_endpoint != external_endpoint and internal_endpoint in url:
+                url = url.replace(internal_endpoint, external_endpoint)
+                logger.debug(
+                    "Replaced internal endpoint with external",
+                    internal=internal_endpoint,
+                    external=external_endpoint
+                )
 
             logger.info(
                 "Presigned URL generated",
