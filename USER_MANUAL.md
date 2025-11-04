@@ -21,6 +21,9 @@ Built with [Praval Agentic Framework](https://pravalagents.com)
 6. [Chat Interface](#chat-interface)
 7. [Knowledge Base Management](#knowledge-base-management)
 8. [Advanced Features](#advanced-features)
+   - [Proactive Research Insights](#proactive-research-insights-new)
+   - [Conversation Persistence](#conversation-persistence)
+   - [Smart Title Generation](#smart-title-generation)
 9. [Tips & Best Practices](#tips--best-practices)
 10. [Troubleshooting](#troubleshooting)
 11. [FAQ](#faq)
@@ -40,7 +43,9 @@ Praval Deep Research is a **completely local**, privacy-focused research assista
 - **No Internet Required**: Once papers are downloaded, work completely offline
 - **Intelligent Agents**: 6 specialized AI agents help you research efficiently
 - **Semantic Search**: Find relevant information across all your papers
-- **Chat History**: Never lose track of your research conversations
+- **Persistent Chat History**: Conversations saved in PostgreSQL database, never lost
+- **Proactive Insights**: AI discovers research trends and gaps in your knowledge base
+- **One-Click Search**: Click any trending topic to instantly find relevant papers
 - **PDF Access**: Read papers directly in your browser
 
 ### System Requirements
@@ -309,10 +314,11 @@ The **Chat** page is where you ask questions and explore your research papers th
 4. The system automatically creates and names your conversation
 
 **Auto-Generated Titles:**
-- After your first question, the system generates a smart title
+- After your first question, the system generates a smart title using AI
 - Titles are descriptive (e.g., "Understanding Transformer Architecture")
 - Like ChatGPT/Claude, titles help you find conversations later
 - Titles appear in the sidebar automatically
+- All conversations saved in PostgreSQL database (persistent storage)
 
 ### Asking Questions
 
@@ -342,6 +348,7 @@ Each answer includes:
 2. **Source Citations**: Papers used to generate the answer
 3. **Relevance Scores**: How relevant each source is (0.0-1.0)
 4. **Follow-up Questions**: 3 suggested related questions
+5. **Copy Button**: Copy answer with citations for easy sharing
 
 **Reading Citations:**
 ```
@@ -520,13 +527,52 @@ At the top of the page, you'll see four key metrics:
 
 ## Advanced Features
 
+### Proactive Research Insights (NEW)
+
+**What Are Research Insights?**
+
+At the bottom of the **Discover** page, you'll find AI-generated insights about your research collection. The system analyzes all your indexed papers and recent conversations to provide:
+
+**Research Areas:**
+- AI identifies clusters of related topics in your papers
+- Shows how many papers belong to each area
+- Helps you understand your research focus
+
+**Trending Topics:**
+- Keywords and concepts frequently appearing in your papers
+- Clickable tags that instantly search for related papers
+- One-click navigation: click any topic → auto-search → view results
+
+**Research Gaps:**
+- AI suggests unexplored areas based on your collection
+- Identifies opportunities for deeper investigation
+- Points out missing perspectives or approaches
+
+**Personalized Next Steps:**
+- Strategic recommendations based on your chat history
+- Suggests papers to explore next
+- Helps guide your research direction
+
+**Using Insights:**
+1. Scroll to bottom of Discover page
+2. Review the four insight categories
+3. Click any trending topic to instantly search papers
+4. Use suggestions to guide your research
+
+**Smart Caching:**
+- Insights generated in ~35 seconds
+- Cached for 1 hour for instant retrieval
+- Click "🔄 Refresh" to regenerate with latest data
+- Automatic cache invalidation when new papers indexed
+
 ### Conversation Persistence
 
 **How It Works:**
-- All conversations automatically saved to Redis
+- All conversations automatically saved to PostgreSQL database
 - Messages persist across browser sessions
 - Reload page without losing work
-- Conversations survive container restarts
+- Conversations survive container restarts and system reboots
+- Relational database ensures data integrity with CASCADE deletes
 
 **Auto-Loading:**
 - Most recent conversation loads automatically
@@ -534,9 +580,10 @@ At the top of the page, you'll see four key metrics:
 - No manual saving required
 
 **Data Location:**
-- Stored in Docker volume `redis_data`
+- Stored in Docker volume `postgres_data` (PostgreSQL database)
+- Relational storage with proper foreign key constraints
 - Backed up with Docker volume backups
-- Deleted only when you delete conversation
+- Deleted only when you delete conversation (CASCADE to messages)
 
 ### Smart Title Generation
 

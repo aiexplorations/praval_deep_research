@@ -1,5 +1,15 @@
 # Praval Deep Research - Project Guidelines
 
+## ⚠️ CRITICAL GIT WORKFLOW RULES ⚠️
+
+**NEVER PUSH OR CREATE PRs WITHOUT EXPLICIT USER APPROVAL**
+
+1. **STOP BEFORE PUSHING**: Never run `git push`, `git push --force`, `gh pr create`, or similar commands without the user explicitly asking
+2. **USER REVIEWS FIRST**: After committing changes, WAIT for the user to review before pushing
+3. **ASK PERMISSION**: If uncertain whether to push, ASK the user first
+4. **LOCAL COMMITS ARE FINE**: It's okay to commit locally for checkpointing, but pushing requires user approval
+5. **NO ASSUMPTIONS**: Don't assume the user wants changes pushed just because they're committed
+
 ## Project Overview
 
 The Praval Deep Research system is an intelligent research assistant built on the Praval agentic framework. This project demonstrates excellence in agent-driven architecture, combining academic rigor with enterprise-grade engineering practices.
@@ -12,6 +22,7 @@ The Praval Deep Research system is an intelligent research assistant built on th
 4. **Production-Ready Quality**: Every component meets enterprise standards
 5. **Academic Rigor**: Research functionality grounded in sound theoretical foundations
 6. **No mock code or fake implementations**: All code is real and there is no simulation, mocking or other such stuff
+7. **User-Controlled Git**: Never push or create PRs without explicit user approval
 
 ## Praval Agent Development Standards
 
