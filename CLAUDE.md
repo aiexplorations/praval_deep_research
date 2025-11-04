@@ -10,6 +10,14 @@
 4. **LOCAL COMMITS ARE FINE**: It's okay to commit locally for checkpointing, but pushing requires user approval
 5. **NO ASSUMPTIONS**: Don't assume the user wants changes pushed just because they're committed
 
+## ⚙️ TOOL CONFIGURATION RULES
+
+**PDF Generation with Pandoc**
+
+1. **ALWAYS use xelatex**: When generating PDFs with Pandoc, always use `--pdf-engine=xelatex`
+2. **Standard command**: `pandoc INPUT.md -o OUTPUT.pdf --pdf-engine=xelatex --metadata title="TITLE" -V geometry:margin=1in`
+3. **Never use wkhtmltopdf**: It's not installed and will fail
+
 ## Project Overview
 
 The Praval Deep Research system is an intelligent research assistant built on the Praval agentic framework. This project demonstrates excellence in agent-driven architecture, combining academic rigor with enterprise-grade engineering practices.
