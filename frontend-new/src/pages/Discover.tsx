@@ -4,7 +4,7 @@
  * Search for research papers from ArXiv with advanced filtering options.
  */
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { apiClient } from '../services/api/client';
 import type { Paper, PaperSearchRequest } from '../types';
@@ -16,6 +16,7 @@ export default function Discover() {
   const [selectedPapers, setSelectedPapers] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState<Paper[]>([]);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Search mutation
   const searchMutation = useMutation({
@@ -68,6 +69,37 @@ export default function Discover() {
     indexMutation.mutate(papersToIndex);
   };
 
+  const handleInsightClick = (topic: string) => {
+    console.log('🎯 Insight clicked:', topic);
+
+    // Step 1: Set the query
+    setQuery(topic);
+    console.log('✓ Step 1: Query set');
+
+    // Step 2: Scroll to top (use setTimeout to ensure DOM updates)
+    setTimeout(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      console.log('✓ Step 2: Scrolled to top');
+
+      // Focus the search input to show the query was populated
+      if (searchInputRef.current) {
+        searchInputRef.current.focus();
+        console.log('✓ Step 2.5: Input focused');
+      }
+    }, 50);
+
+    // Step 3: Auto-trigger search (slight delay to ensure state updates)
+    setTimeout(() => {
+      searchMutation.mutate({
+        query: topic.trim(),
+        domain: domain.replace(/_/g, ' '),
+        max_results: 10,
+        quality_threshold: 0.3
+      });
+      console.log('✓ Step 3: Search triggered');
+    }, 100);
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-8 max-w-7xl">
@@ -77,11 +109,6 @@ export default function Discover() {
           <p className="text-muted-foreground">
             Search and index papers from ArXiv for semantic Q&A
           </p>
-        </div>
-
-        {/* Research Insights */}
-        <div className="mb-8">
-          <ResearchInsights />
         </div>
 
         {/* Success Message */}
@@ -104,6 +131,7 @@ export default function Discover() {
         <form onSubmit={handleSearch} className="mb-8">
           <div className="flex flex-col md:flex-row gap-4">
             <input
+              ref={searchInputRef}
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -248,6 +276,11 @@ export default function Discover() {
             <p className="mt-4 text-muted-foreground">Searching ArXiv papers...</p>
           </div>
         )}
+
+        {/* Research Insights - Moved to bottom */}
+        <div className="mt-12">
+          <ResearchInsights onTopicClick={handleInsightClick} />
+        </div>
       </div>
     </div>
   );

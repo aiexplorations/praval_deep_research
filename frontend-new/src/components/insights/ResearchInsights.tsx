@@ -14,9 +14,10 @@ import { apiClient } from '../../services/api/client';
 
 interface ResearchInsightsProps {
   onRefresh?: () => void;
+  onTopicClick?: (topic: string) => void;
 }
 
-export default function ResearchInsights({ onRefresh }: ResearchInsightsProps) {
+export default function ResearchInsights({ onRefresh, onTopicClick }: ResearchInsightsProps) {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['research-insights'],
     queryFn: () => apiClient.getResearchInsights(),
@@ -116,12 +117,14 @@ export default function ResearchInsights({ onRefresh }: ResearchInsightsProps) {
           <h4 className="font-medium text-sm mb-3">🔥 Trending Topics</h4>
           <div className="flex flex-wrap gap-2">
             {data.trending_topics.map((topic, idx) => (
-              <span
+              <button
                 key={idx}
-                className="px-3 py-1 bg-primary/10 text-primary text-xs rounded-full border border-primary/20"
+                onClick={() => onTopicClick?.(topic)}
+                className="px-3 py-1 bg-primary/10 text-primary text-xs rounded-full border border-primary/20 hover:bg-primary/20 transition-colors cursor-pointer"
+                title={`Search for: ${topic}`}
               >
                 {topic}
-              </span>
+              </button>
             ))}
           </div>
         </div>
@@ -133,15 +136,23 @@ export default function ResearchInsights({ onRefresh }: ResearchInsightsProps) {
           <h4 className="font-medium text-sm mb-3">💡 Research Opportunities</h4>
           <div className="space-y-2">
             {data.research_gaps.map((gap, idx) => (
-              <div key={idx} className="p-3 bg-muted/30 rounded border border-dashed border-border">
-                <h5 className="font-medium text-sm text-primary">{gap.gap_title}</h5>
+              <button
+                key={idx}
+                onClick={() => onTopicClick?.(gap.gap_title)}
+                className="w-full text-left p-3 bg-muted/30 rounded border border-dashed border-border hover:bg-muted/50 hover:border-primary/30 transition-all cursor-pointer"
+                title={`Search for: ${gap.gap_title}`}
+              >
+                <h5 className="font-medium text-sm text-primary flex items-center gap-2">
+                  {gap.gap_title}
+                  <span className="text-xs opacity-50">→ Click to search</span>
+                </h5>
                 <p className="text-xs text-muted-foreground mt-1">{gap.description}</p>
                 {gap.potential_value && (
                   <p className="text-xs text-muted-foreground mt-1">
                     <span className="font-medium">Value:</span> {gap.potential_value}
                   </p>
                 )}
-              </div>
+              </button>
             ))}
           </div>
         </div>
