@@ -150,3 +150,6 @@ export interface UserSettings {
   voiceEnabled: boolean;
   autoSpeak: boolean;
 }
+
+// Proactive Research Insights types
+export * from './insights';

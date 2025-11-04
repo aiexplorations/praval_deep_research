@@ -36,6 +36,7 @@ services:
       MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-research-papers}
       MINIO_SECURE: "false"
       REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql+asyncpg://research_user:${POSTGRES_PASSWORD:-research_pass}@postgres:5432/praval_research
 
       # Embedding Configuration
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
@@ -51,6 +52,8 @@ services:
       minio:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - research_network
@@ -107,6 +110,8 @@ services:
       minio:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
       research_api:
         condition: service_healthy
@@ -257,21 +262,20 @@ services:
     profiles:
       - dev-tools
 
-  # Optional: PostgreSQL for metadata storage
+  # PostgreSQL for chat history storage
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: research_postgres
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: research_metadata
+      POSTGRES_DB: praval_research
       POSTGRES_USER: research_user
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-research_pass}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: pg_isready -U research_user -d research_metadata
+      test: pg_isready -U research_user -d praval_research
       interval: 30s
       timeout: 10s
       retries: 3
@@ -279,8 +283,6 @@ services:
     networks:
       - research_network
     restart: unless-stopped
-    profiles:
-      - with-postgres
 
   # Monitoring
   prometheus:

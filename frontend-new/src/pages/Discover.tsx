@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { apiClient } from '../services/api/client';
 import type { Paper, PaperSearchRequest } from '../types';
+import ResearchInsights from '../components/insights/ResearchInsights';
 
 export default function Discover() {
   const [query, setQuery] = useState('');
@@ -76,6 +77,11 @@ export default function Discover() {
           <p className="text-muted-foreground">
             Search and index papers from ArXiv for semantic Q&A
           </p>
+        </div>
+
+        {/* Research Insights */}
+        <div className="mb-8">
+          <ResearchInsights />
         </div>
 
         {/* Success Message */}

@@ -91,14 +91,24 @@ async def lifespan(app: FastAPI):
         # Initialize settings
         settings = get_settings()
         logger.info("Initializing Praval research agents")
-        
+
+        # Initialize database (create tables if not exist)
+        logger.info("Initializing PostgreSQL database")
+        try:
+            from ..db.base import init_db
+            await init_db()
+            logger.info("Database initialized successfully")
+        except Exception as db_error:
+            logger.warning(f"Database initialization failed: {db_error}")
+            logger.warning("Chat history will fallback to Redis if PostgreSQL unavailable")
+
         # Note: Praval agents are initialized on-demand in routes/research.py
         # This allows for better scalability and resource management
-        
+
         # Store startup metadata
         app.state.started_at = time.time()
         app.state.distributed_mode = True  # Using Praval distributed agents
-        
+
         logger.info("API startup completed successfully")
         
     except Exception as e:
@@ -110,15 +120,24 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down Praval Deep Research API")
-    
+
     try:
+        # Close database connections
+        logger.info("Closing database connections")
+        try:
+            from ..db.base import close_db
+            await close_db()
+            logger.info("Database connections closed")
+        except Exception as db_error:
+            logger.warning(f"Database cleanup error: {db_error}")
+
         # Note: Praval agents handle their own lifecycle
         # No explicit shutdown needed for distributed agents
         logger.info("API shutdown completed")
-        
+
     except Exception as e:
         logger.error("Error during shutdown", error=str(e))
-    
+
     logger.info("API shutdown completed")
 
 
