@@ -9,7 +9,7 @@ intelligent question answering.
 import asyncio
 import time
 import uuid
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, status, BackgroundTasks
 from fastapi.responses import StreamingResponse
 import structlog
@@ -39,6 +39,43 @@ from openai import OpenAI
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/research", tags=["research"])
+
+
+def generate_conversation_title(question: str, answer: str) -> str:
+    """
+    Generate a concise conversation title from the first Q&A.
+
+    Uses LLM to create a 5-10 word summary like ChatGPT/Claude.
+    """
+    try:
+        from agentic_research.core.config import get_settings
+        settings = get_settings()
+        openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Generate a concise 5-10 word title for this conversation. Be specific and descriptive. Return only the title, no quotes or extra text."
+                },
+                {
+                    "role": "user",
+                    "content": f"Question: {question}\nAnswer: {answer[:500]}"
+                }
+            ],
+            temperature=0.3,
+            max_tokens=50
+        )
+
+        title = response.choices[0].message.content.strip().strip('"\'')
+        # Limit to 60 characters for UI
+        return title[:60] if len(title) > 60 else title
+
+    except Exception as e:
+        logger.error("Failed to generate conversation title", error=str(e))
+        # Fallback to first 50 chars of question
+        return question[:50] + "..." if len(question) > 50 else question
 
 # Track ongoing research sessions
 _active_sessions: Dict[str, Dict[str, Any]] = {}
@@ -495,7 +532,58 @@ Once you've found and indexed some papers on this topic, I'll be able to provide
                 response_time_ms=response_time_ms,
                 confidence=response.confidence_score
             )
-            
+
+            # Save messages to conversation history if conversation_id provided
+            if request.conversation_id:
+                try:
+                    from agentic_research.storage.conversation_store import get_conversation_store
+
+                    store = get_conversation_store()
+
+                    # Ensure conversation exists (create with specific ID if needed)
+                    conv = await store.get_conversation(request.conversation_id)
+                    is_first_message = False
+
+                    if not conv:
+                        logger.info(
+                            "Conversation not found, creating new one",
+                            conversation_id=request.conversation_id
+                        )
+                        await store.create_conversation(
+                            title="New Chat",  # Temporary title
+                            conversation_id=request.conversation_id
+                        )
+                        is_first_message = True
+                    elif conv.message_count == 0:
+                        is_first_message = True
+
+                    # Save user message
+                    await store.add_message(
+                        conv_id=request.conversation_id,
+                        role="user",
+                        content=request.question
+                    )
+
+                    # Save assistant message with sources
+                    await store.add_message(
+                        conv_id=request.conversation_id,
+                        role="assistant",
+                        content=answer,
+                        sources=[s.model_dump() if hasattr(s, 'model_dump') else s for s in source_citations]
+                    )
+
+                    # Auto-generate title from first Q&A (like ChatGPT/Claude)
+                    if is_first_message:
+                        logger.info("Generating conversation title from first Q&A")
+                        generated_title = generate_conversation_title(request.question, answer)
+                        await store.update_conversation_title(request.conversation_id, generated_title)
+                        logger.info("Updated conversation title", title=generated_title)
+
+                    logger.info("Saved messages to conversation", conversation_id=request.conversation_id)
+                except Exception as conv_error:
+                    # Log but don't fail the request if conversation saving fails
+                    logger.error("Failed to save conversation", error=str(conv_error), exc_info=True)
+
             return response
             
         finally:
@@ -920,4 +1008,237 @@ async def get_kb_stats() -> Dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve statistics: {str(e)}"
+        )
+
+
+@router.get("/knowledge-base/papers/{paper_id}/pdf", summary="Download PDF for a paper")
+async def get_paper_pdf(paper_id: str):
+    """
+    Stream a paper's PDF directly from storage.
+
+    Args:
+        paper_id: The ArXiv ID or unique identifier of the paper
+
+    Returns:
+        PDF file stream
+    """
+    try:
+        from fastapi.responses import StreamingResponse
+        from agentic_research.storage.minio_client import MinIOClient
+        import io
+
+        minio_client = MinIOClient()
+
+        # Check if PDF exists
+        if not minio_client.pdf_exists(paper_id):
+            logger.warning("PDF not found in MinIO", paper_id=paper_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"PDF not found for paper '{paper_id}'. The paper may not have been indexed yet."
+            )
+
+        # Download PDF from MinIO
+        pdf_data = minio_client.download_pdf(paper_id)
+
+        logger.info("Serving PDF", paper_id=paper_id, size_bytes=len(pdf_data))
+
+        # Stream PDF to browser
+        return StreamingResponse(
+            io.BytesIO(pdf_data),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{paper_id}.pdf"'
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to serve PDF",
+            paper_id=paper_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to serve PDF: {str(e)}"
+        )
+
+# ==========================================
+# Conversation Management Endpoints
+# ==========================================
+
+class ConversationCreateRequest(BaseModel):
+    """Request model for creating a conversation."""
+    title: Optional[str] = None
+
+@router.post("/conversations", summary="Create a new conversation")
+async def create_conversation(request: ConversationCreateRequest = ConversationCreateRequest()) -> Dict[str, Any]:
+    """
+    Create a new conversation for chat history.
+
+    Returns conversation metadata with ID.
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+
+        store = get_conversation_store()
+        conversation = await store.create_conversation(request.title)
+
+        logger.info("Created new conversation", conversation_id=conversation.id, title=conversation.title)
+
+        return conversation.model_dump()
+
+    except Exception as e:
+        logger.error("Failed to create conversation", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create conversation: {str(e)}"
+        )
+
+
+@router.get("/conversations", summary="List all conversations")
+async def list_conversations(
+    limit: int = 50,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """
+    List all conversations ordered by most recent.
+    
+    Returns:
+        List of conversation metadata (without full message history)
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+        
+        store = get_conversation_store()
+        conversations = await store.list_conversations(limit, offset)
+        
+        return {
+            "conversations": [c.model_dump() for c in conversations],
+            "total": len(conversations),
+            "limit": limit,
+            "offset": offset
+        }
+    
+    except Exception as e:
+        logger.error("Failed to list conversations", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list conversations: {str(e)}"
+        )
+
+
+@router.get("/conversations/{conversation_id}", summary="Get conversation with messages")
+async def get_conversation(conversation_id: str) -> Dict[str, Any]:
+    """
+    Get a specific conversation with all its messages.
+    
+    Args:
+        conversation_id: UUID of the conversation
+        
+    Returns:
+        Conversation metadata and full message history
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+        
+        store = get_conversation_store()
+        
+        # Get metadata
+        conversation = await store.get_conversation(conversation_id)
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Conversation {conversation_id} not found"
+            )
+        
+        # Get messages
+        messages = await store.get_messages(conversation_id)
+        
+        return {
+            **conversation.model_dump(),
+            "messages": [m.model_dump() for m in messages]
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get conversation", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve conversation: {str(e)}"
+        )
+
+
+class ConversationUpdateRequest(BaseModel):
+    """Request model for updating a conversation."""
+    title: str
+
+@router.put("/conversations/{conversation_id}", summary="Update conversation title")
+async def update_conversation(
+    conversation_id: str,
+    request: ConversationUpdateRequest
+) -> Dict[str, Any]:
+    """
+    Update conversation title.
+
+    Args:
+        conversation_id: UUID of the conversation
+        request: Update request with new title
+
+    Returns:
+        Success message
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+
+        store = get_conversation_store()
+        success = await store.update_conversation_title(conversation_id, request.title)
+
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Conversation {conversation_id} not found"
+            )
+
+        logger.info("Updated conversation title", conversation_id=conversation_id, title=request.title)
+
+        return {"message": "Conversation updated successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to update conversation", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update conversation: {str(e)}"
+        )
+
+
+@router.delete("/conversations/{conversation_id}", summary="Delete a conversation")
+async def delete_conversation(conversation_id: str) -> Dict[str, Any]:
+    """
+    Delete a conversation and all its messages.
+    
+    Args:
+        conversation_id: UUID of the conversation
+        
+    Returns:
+        Success message
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+        
+        store = get_conversation_store()
+        await store.delete_conversation(conversation_id)
+        
+        return {"message": f"Conversation {conversation_id} deleted successfully"}
+    
+    except Exception as e:
+        logger.error("Failed to delete conversation", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete conversation: {str(e)}"
         )
