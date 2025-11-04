@@ -243,71 +243,39 @@ graph LR
 
 ### System Overview
 
-```mermaid
-graph TB
-    subgraph "Frontend Layer"
-        UI[React Frontend<br/>Port 3000<br/>TypeScript + Vite + Tailwind]
-    end
-
-    subgraph "API Layer"
-        API[FastAPI Backend<br/>Port 8000<br/>REST + SSE]
-    end
-
-    subgraph "Persistent Storage"
-        PG[(PostgreSQL<br/>Chat History<br/>Conversations & Messages)]
-        Qdrant[(Qdrant<br/>Vector DB<br/>Paper Embeddings)]
-        MinIO[(MinIO<br/>Object Storage<br/>PDF Files)]
-    end
-
-    subgraph "Cache & Queue"
-        Redis[(Redis<br/>Insights Cache<br/>1hr TTL)]
-        RabbitMQ[RabbitMQ<br/>Message Queue<br/>Agent Communication]
-    end
-
-    subgraph "Agent Layer"
-        Agents[Praval Agents<br/>Paper Discovery<br/>Document Processing<br/>Q&A Specialist<br/>Research Advisor]
-    end
-
-    subgraph "External Services"
-        OpenAI[OpenAI API<br/>Embeddings<br/>LLM Responses]
-    end
-
-    %% Frontend to Backend
-    UI -->|HTTP Requests| API
-    API -->|JSON Responses| UI
-
-    %% Backend to Storage
-    API -->|Save/Load Conversations| PG
-    API -->|Cache Insights| Redis
-    API -->|Semantic Search| Qdrant
-    API -->|Stream PDFs| MinIO
-    API -->|Publish Tasks| RabbitMQ
-    API -->|Generate Embeddings/LLM| OpenAI
-
-    %% Agents to Infrastructure
-    RabbitMQ -->|Consume Tasks| Agents
-    Agents -->|Store Vectors| Qdrant
-    Agents -->|Save PDFs| MinIO
-    Agents -->|Generate Embeddings/LLM| OpenAI
-    Agents -->|Publish Results| RabbitMQ
-
-    %% Read operations
-    Redis -.->|Return Cached Data| API
-    PG -.->|Return Messages| API
-    Qdrant -.->|Return Similar Chunks| API
-    MinIO -.->|Stream PDF Bytes| API
-    OpenAI -.->|Return Embeddings/Text| API
-    OpenAI -.->|Return Embeddings/Text| Agents
-
-    style UI fill:#61dafb,stroke:#333,stroke-width:2px
-    style API fill:#009688,stroke:#333,stroke-width:2px
-    style Agents fill:#ff9800,stroke:#333,stroke-width:2px
-    style PG fill:#336791,stroke:#333,stroke-width:2px,color:#fff
-    style Redis fill:#dc382d,stroke:#333,stroke-width:2px,color:#fff
-    style Qdrant fill:#6366f1,stroke:#333,stroke-width:2px,color:#fff
-    style MinIO fill:#c72c48,stroke:#333,stroke-width:2px,color:#fff
-    style RabbitMQ fill:#ff6600,stroke:#333,stroke-width:2px,color:#fff
-    style OpenAI fill:#10a37f,stroke:#333,stroke-width:2px,color:#fff
+```
+┌─────────────────────────────────────────────┐
+│   React Frontend (TypeScript + Vite)       │
+│              Port 3000                      │
+└────────────────┬────────────────────────────┘
+                 │ HTTP/REST
+                 ↓
+┌─────────────────────────────────────────────┐
+│      FastAPI Backend (REST + SSE)           │
+│              Port 8000                      │
+└─┬──┬──┬──┬──┬─────────────────────┬─────────┘
+  │  │  │  │  │                     │
+  │  │  │  │  │                     ↓
+  │  │  │  │  │              ┌─────────────┐
+  │  │  │  │  │              │  RabbitMQ   │
+  │  │  │  │  │              │   Queue     │
+  │  │  │  │  │              └──────┬──────┘
+  │  │  │  │  │                     │
+  │  │  │  │  │                     ↓
+  │  │  │  │  │              ┌─────────────┐
+  │  │  │  │  │              │   Praval    │
+  │  │  │  │  │              │   Agents    │
+  │  │  │  │  │              │ 6 Specialists│
+  │  │  │  │  │              └──┬──┬───┬───┘
+  │  │  │  │  │                 │  │   │
+  ↓  ↓  ↓  ↓  ↓                 ↓  ↓   ↓
+┌───┐┌────┐┌──────┐┌──────┐  ┌────────────┐
+│PG ││Redis│Qdrant││MinIO │  │  OpenAI    │
+│   ││     │Vector││ PDFs │  │ Embeddings │
+│   ││Cache││  DB  ││      │  │    LLM     │
+└───┘└────┘└──────┘└──────┘  └────────────┘
+ Chat  Insights  Papers   Storage     AI
+History  (1hr)  Vectors   Objects   Services
 ```
 
 **Data Flow:**
