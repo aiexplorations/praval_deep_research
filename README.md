@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="praval_deep_research_logo.png" alt="Praval Deep Research Logo" width="200"/>
+<img src="frontend-new/public/praval_deep_research_logo.png" alt="Praval Deep Research Logo" width="200"/>
 
 # Praval Deep Research
 
@@ -8,11 +8,17 @@
 
 <p align="center">
   <a href="https://pravalagents.com">
-    <img src="frontend/assets/praval_logo.png" alt="Built with Praval" width="120"/>
+    <img src="frontend-new/public/praval_logo.png" alt="Built with Praval" width="120"/>
   </a>
 </p>
 
 Built with the [Praval Agentic Framework](https://pravalagents.com) - demonstrating production-grade, identity-driven agent architecture for intelligent research workflows.
+
+[![React](https://img.shields.io/badge/React-18-blue)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)](https://www.typescriptlang.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104-green)](https://fastapi.tiangolo.com)
+[![Praval](https://img.shields.io/badge/Praval-0.7-orange)](https://pravalagents.com)
+[![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://www.docker.com/)
 
 </div>
 
@@ -21,6 +27,11 @@ Built with the [Praval Agentic Framework](https://pravalagents.com) - demonstrat
 ## 🎯 What Is This?
 
 Praval Deep Research is a **completely local**, privacy-focused research assistant that helps you discover, analyze, and understand academic papers from ArXiv. Unlike cloud-based solutions, all your research data stays on your machine, with intelligent multi-agent processing powered by the Praval framework.
+
+<div align="center">
+<img src="img/pdr_01.png" alt="Praval Deep Research Interface" width="800"/>
+<p><em>Modern React interface with Discover, Chat, and Knowledge Base features</em></p>
+</div>
 
 ### Core Philosophy
 
@@ -49,23 +60,45 @@ Praval Deep Research is a **completely local**, privacy-focused research assista
 ### 📚 Paper Discovery & Management
 - **Smart Search**: Query ArXiv with domain-specific filtering
 - **Automatic Processing**: Downloads PDFs, extracts text, generates embeddings
-- **Knowledge Base**: View all indexed papers with statistics
-- **Easy Management**: Delete papers or clear knowledge base with one click
+- **Knowledge Base**: View all indexed papers with statistics and metadata
+- **PDF Viewing**: Open and read papers directly in your browser
+- **Easy Management**: Delete individual papers or clear entire knowledge base
 
-### 💬 Intelligent Q&A
-- **Semantic Search**: Vector-based retrieval finds relevant paper sections
+### 💬 Intelligent Conversations
+
+<div align="center">
+<img src="img/pdr_02.png" alt="Chat Interface with History" width="800"/>
+<p><em>Persistent chat history with auto-generated conversation titles</em></p>
+</div>
+
+- **Chat History**: All conversations automatically saved with Redis
+- **Smart Titles**: LLM-generated conversation names (like ChatGPT/Claude)
+- **Conversation Management**: Create, load, and delete chat threads
 - **Context-Aware Answers**: LLM generates answers using retrieved evidence
-- **Source Citations**: Every answer cites specific papers and relevance scores
+- **Source Citations**: Every answer cites specific papers with relevance scores
 - **Follow-up Suggestions**: Get 3 related questions to explore deeper
+
+### 📖 Knowledge Base Management
+
+<div align="center">
+<img src="img/pdr_03.png" alt="Knowledge Base with PDF Viewer" width="800"/>
+<p><em>Comprehensive knowledge base with inline PDF viewing</em></p>
+</div>
+
+- **Paper Catalog**: Sortable table of all indexed papers
+- **Statistics Dashboard**: Real-time metrics on papers, vectors, and categories
+- **PDF Access**: View any indexed paper with one click
+- **Search & Filter**: Find specific papers in your collection
+- **Bulk Operations**: Clear entire knowledge base when needed
 
 ### 🤖 Praval Agent Architecture
 Six specialized agents working autonomously:
 
-1. **Paper Discovery Agent** - Searches and ranks ArXiv papers
-2. **Document Processor Agent** - Downloads, extracts, chunks, embeds
-3. **Semantic Analyzer Agent** - Identifies themes across papers
-4. **Summarization Agent** - Creates comprehensive syntheses
-5. **Q&A Specialist Agent** - Answers questions using retrieved context
+1. **Paper Discovery Agent** - Searches and ranks ArXiv papers with memory-driven optimization
+2. **Document Processor Agent** - Downloads, extracts, chunks, and generates embeddings
+3. **Semantic Analyzer Agent** - Identifies themes and connections across papers
+4. **Summarization Agent** - Creates comprehensive paper syntheses
+5. **Q&A Specialist Agent** - Answers questions using retrieved context and personalization
 6. **Research Advisor Agent** - Provides strategic research guidance
 
 Each agent has:
@@ -74,13 +107,22 @@ Each agent has:
 - **Intelligence**: LLM-powered decision making
 - **Autonomy**: Self-organizing through message passing
 
+### 🎨 Modern User Experience
+- **React + TypeScript**: Type-safe, component-based frontend
+- **Tailwind CSS**: Clean, accessible design with proper color contrast
+- **Responsive Design**: Works on desktop and tablet
+- **Real-time Updates**: Live progress tracking during indexing
+- **Keyboard Shortcuts**: Efficient navigation and interaction
+- **Dark Mode Ready**: Infrastructure for theme switching
+
 ### 🏗️ Production-Grade Infrastructure
 - **Vector Database**: Qdrant for semantic search (1536-dim OpenAI embeddings)
-- **Object Storage**: MinIO for PDF storage
+- **Object Storage**: MinIO for PDF storage with streaming proxy
 - **Message Queue**: RabbitMQ for reliable agent communication
-- **Cache Layer**: Redis for session management
+- **Cache Layer**: Redis for session and conversation persistence
 - **Real-time Updates**: Server-Sent Events for live progress tracking
-- **Monitoring**: Prometheus metrics and structured logging
+- **Containerized**: Full Docker Compose deployment with health checks
+- **Monitoring**: Structured logging with JSON output
 
 ---
 
@@ -96,8 +138,8 @@ Each agent has:
 ### 1. Clone and Configure
 
 ```bash
-git clone https://github.com/yourusername/agentic_deep_research.git
-cd agentic_deep_research
+git clone https://github.com/aiexplorations/praval_deep_research.git
+cd praval_deep_research
 
 # Copy environment template
 cp .env.example .env
@@ -110,18 +152,22 @@ nano .env
 ### 2. Deploy (One Command)
 
 ```bash
-# Deploy backend + frontend
-./scripts/deploy.sh --with-frontend
+# Build and start all services
+docker-compose up -d
 
-# Or deploy everything including monitoring
-./scripts/deploy.sh --with-monitoring
+# Check status
+docker-compose ps
+
+# View logs
+docker-compose logs -f research_frontend research_api
 ```
 
 ### 3. Access Your Research Assistant
 
 - **Frontend**: http://localhost:3000
 - **API Documentation**: http://localhost:8000/docs
-- **Knowledge Base**: http://localhost:3000/knowledge-base.html
+- **RabbitMQ Management**: http://localhost:15672 (user: `research_user`, pass: `research_pass`)
+- **MinIO Console**: http://localhost:9001 (user: `minioadmin`, pass: `minioadmin`)
 
 ---
 
@@ -140,38 +186,37 @@ graph LR
     G --> H[Ready for Q&A]
     H --> I[Q&A Specialist Agent]
     I --> J[Answer Questions]
+    J --> K[Save to Redis]
 ```
 
 ### Example Usage
 
-**1. Search for Papers**
-```
-Query: "transformer attention mechanisms"
-Domain: AI
-Results: 10 relevant ArXiv papers
-```
+**1. Discover Papers**
+- Navigate to the **Discover** page
+- Search: "transformer attention mechanisms"
+- Select papers and click "Index Selected"
+- Watch real-time processing updates
 
 **2. Papers Are Automatically Processed**
 - PDFs downloaded to local MinIO storage
-- Text extracted and chunked intelligently
+- Text extracted and chunked intelligently (1000 chars, 200 overlap)
 - Embeddings generated with OpenAI text-embedding-3-small
 - Vectors stored in local Qdrant database
 - ~30-60 seconds per paper
 
-**3. Ask Questions**
-```
-Q: "What are the key innovations in transformer architecture?"
-A: [Generated answer with citations from your indexed papers]
-Sources:
-- "Attention Is All You Need" (relevance: 0.89)
-- "BERT: Pre-training..." (relevance: 0.84)
-- "Transformer-XL..." (relevance: 0.78)
-```
+**3. Ask Questions in Chat**
+- Navigate to the **Chat** page
+- Ask: "What are the key innovations in transformer architecture?"
+- Receive answer with source citations
+- Conversation auto-saves with smart title
+- Access chat history from sidebar
 
 **4. Manage Your Knowledge Base**
+- Navigate to **Knowledge Base** page
 - View all 28 indexed papers
 - See 1,641 stored vectors
 - Average 58.6 chunks per paper
+- Click "View PDF" to read any paper
 - Delete papers or clear entire knowledge base
 
 ---
@@ -182,20 +227,20 @@ Sources:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    Frontend (Port 3000)              │
-│        HTML/CSS/JS with Tailwind + Real-time SSE    │
+│         React Frontend (Nginx - Port 3000)          │
+│   TypeScript + Vite + Tailwind CSS + React Query    │
 └───────────────────┬─────────────────────────────────┘
-                    │
+                    │ /api proxy
 ┌───────────────────▼─────────────────────────────────┐
 │              FastAPI Backend (Port 8000)             │
-│           REST API + WebSocket + Health Checks      │
+│    REST API + SSE + Conversation Management         │
 └───────────────────┬─────────────────────────────────┘
                     │
         ┌───────────┼───────────┐
         │           │           │
 ┌───────▼──┐  ┌────▼────┐  ┌──▼──────┐
 │ RabbitMQ │  │  Redis  │  │  Praval │
-│ Messages │  │  Cache  │  │  Agents │
+│ Messages │  │  Convos │  │  Agents │
 └──────────┘  └─────────┘  └────┬────┘
                                  │
                     ┌────────────┼────────────┐
@@ -206,24 +251,33 @@ Sources:
               └─────────┘  └─────────┘  └────────┘
 ```
 
-### Data Flow
+### New Features in Latest Version
 
-**Paper Indexing**:
-1. User searches ArXiv → Paper Discovery Agent finds papers
-2. Papers sent to Document Processor Agent
-3. PDFs downloaded and stored in MinIO
-4. Text extracted and chunked (1000 chars, 200 overlap)
-5. Embeddings generated via OpenAI API
-6. Vectors stored in Qdrant with full metadata
-7. Papers ready for semantic search
+**Frontend Containerization**
+- Multi-stage Docker build (Node.js → Nginx)
+- Production-optimized React bundle with code splitting
+- Nginx proxy for API requests
+- Hot reload in development mode
 
-**Question Answering**:
-1. User asks question → Q&A Specialist Agent receives query
-2. Query embedded via OpenAI API
-3. Qdrant searches for top-5 most relevant chunks
-4. Retrieved context + query sent to LLM
-5. Answer generated with source citations
-6. Follow-up questions suggested
+**Chat History & Conversations**
+- Persistent conversation storage in Redis
+- Auto-generated titles using GPT-4o-mini
+- Conversation list with message counts
+- Delete conversations with confirmation
+- Auto-load most recent conversation
+
+**PDF Viewing**
+- Stream PDFs through API proxy
+- No MinIO signature issues
+- Opens in new tab for reading
+- Inline display in browser
+
+**UX Improvements**
+- Improved color palette with WCAG AA contrast
+- Removed annoying confirmation dialogs
+- Hover-activated delete buttons
+- Modern rounded UI elements
+- Praval branding in header
 
 ---
 
@@ -241,20 +295,31 @@ CHUNK_OVERLAP=200                  # Overlap between chunks
 MAX_CHUNKS_PER_PAPER=50           # Limit chunks per paper
 EMBEDDING_DIMENSIONS=1536          # OpenAI embedding size
 QDRANT_COLLECTION_NAME=research_vectors
+
+# MinIO Configuration
+MINIO_ENDPOINT=minio:9000              # Internal endpoint
+MINIO_EXTERNAL_ENDPOINT=localhost:9000 # Browser-accessible endpoint
 ```
 
 ### Storage Locations
 
 All data stored locally in Docker volumes:
 
-- **Papers (PDFs)**: `minio_data` volume
-- **Vectors**: `qdrant_data` volume
+- **Papers (PDFs)**: `minio_data` volume (~1-5GB per 100 papers)
+- **Vectors**: `qdrant_data` volume (~200MB per 1000 chunks)
 - **Messages**: `rabbitmq_data` volume
-- **Cache**: `redis_data` volume
+- **Conversations**: `redis_data` volume
+- **Frontend**: Served from Nginx container
 
-To completely reset:
+To backup data:
 ```bash
-./scripts/clean.sh  # Removes all data and containers
+# Backup volumes
+docker run --rm -v praval_deep_research_qdrant_data:/data -v $(pwd):/backup \
+  alpine tar czf /backup/qdrant_backup.tar.gz /data
+
+# Restore
+docker run --rm -v praval_deep_research_qdrant_data:/data -v $(pwd):/backup \
+  alpine tar xzf /backup/qdrant_backup.tar.gz -C /
 ```
 
 ---
@@ -265,64 +330,87 @@ To completely reset:
 
 ```bash
 docker-compose ps
+
+# Expected output:
+# research_api        Up (healthy)
+# research_frontend   Up (healthy)
+# research_qdrant     Up
+# research_minio      Up (healthy)
+# research_rabbitmq   Up (healthy)
+# research_redis      Up (healthy)
 ```
 
 ### View Logs
 
 ```bash
+# Frontend logs
+docker-compose logs -f research_frontend
+
 # API logs
 docker-compose logs -f research_api
-
-# Agent logs
-docker-compose logs -f research_agents
 
 # All services
 docker-compose logs -f
 ```
 
-### Access Management Interfaces
-
-- **RabbitMQ Management**: http://localhost:15672
-  - User: `research_user`, Pass: `research_pass`
-- **MinIO Console**: http://localhost:9001
-  - User: `minioadmin`, Pass: `minioadmin`
-- **Prometheus** (if enabled): http://localhost:9090
-
-### Knowledge Base Statistics
+### Knowledge Base API
 
 ```bash
-# Get stats via API
+# Get stats
 curl http://localhost:8000/research/knowledge-base/stats | jq
 
 # List all papers
 curl http://localhost:8000/research/knowledge-base/papers | jq
+
+# Get specific paper PDF
+curl http://localhost:8000/research/knowledge-base/papers/2504.13908v2/pdf > paper.pdf
+```
+
+### Conversation Management
+
+```bash
+# List all conversations
+curl http://localhost:8000/research/conversations | jq
+
+# Get specific conversation with messages
+curl http://localhost:8000/research/conversations/{conversation_id} | jq
 ```
 
 ---
 
 ## 🧪 Development
 
-### Local Development (Without Docker)
+### Local Development (With Docker for services)
 
 ```bash
-# Install dependencies
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
 # Start infrastructure only
 docker-compose up -d rabbitmq qdrant minio redis
 
-# Run API
+# Frontend development (with hot reload)
+cd frontend-new
+npm install
+npm run dev
+# Opens on http://localhost:3001
+
+# Backend development (separate terminal)
 cd src
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 python -m uvicorn agentic_research.api.main:app --reload --port 8000
+```
 
-# Run agents (separate terminal)
-python run_agents.py
+### Building for Production
 
-# Serve frontend (separate terminal)
-cd frontend
-python -m http.server 3000
+```bash
+# Build all containers
+docker-compose build
+
+# Build specific service
+docker-compose build research_frontend
+
+# Check image sizes
+docker images | grep praval_deep_research
 ```
 
 ### Testing
@@ -331,12 +419,17 @@ python -m http.server 3000
 # Test paper search
 curl -X POST http://localhost:8000/research/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "neural networks", "domain": "computer_science", "max_results": 3}'
+  -d '{"query": "neural networks", "max_results": 3}'
 
 # Test Q&A
 curl -X POST http://localhost:8000/research/ask \
   -H "Content-Type: application/json" \
-  -d '{"question": "What are transformers?"}'
+  -d '{"question": "What are transformers?", "include_sources": true}'
+
+# Test conversation creation
+curl -X POST http://localhost:8000/research/conversations \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My Research Chat"}'
 ```
 
 ---
@@ -353,9 +446,9 @@ This project showcases the power of the [Praval Agentic Framework](https://prava
 - Natural language identity statements guide behavior
 
 **Memory & Learning**
-- Agents remember past interactions
-- Continuous improvement through recall
-- Context-aware decision making
+- Agents remember past interactions using `remember()` and `recall()`
+- Continuous improvement through experience
+- Context-aware decision making with historical patterns
 
 **Self-Organizing**
 - No central coordinator needed
@@ -365,7 +458,7 @@ This project showcases the power of the [Praval Agentic Framework](https://prava
 **Production-Ready**
 - Type-safe, well-tested framework
 - Enterprise-grade reliability
-- Scales horizontally
+- Scales horizontally with Docker
 
 ### Learn More About Praval
 
@@ -380,33 +473,63 @@ This project showcases the power of the [Praval Agentic Framework](https://prava
 ### Current (v1.0)
 - ✅ ArXiv paper search and indexing
 - ✅ Semantic Q&A over indexed papers
-- ✅ Knowledge base management
-- ✅ Real-time agent updates via SSE
-- ✅ 6 specialized Praval agents
+- ✅ Knowledge base management with PDF viewing
+- ✅ Chat history with persistent conversations
+- ✅ Auto-generated conversation titles
+- ✅ Modern React + TypeScript frontend
+- ✅ Full Docker containerization
+- ✅ 6 specialized Praval agents with memory
+
+### In Progress
+- 🔄 Voice interface for hands-free research
+- 🔄 Advanced filtering and search in knowledge base
+- 🔄 Export conversations and research notes
 
 ### Planned
-- 🔄 Support for more paper sources (PubMed, IEEE, etc.)
-- 🔄 Intelligent knowledge base curation agent
-- 🔄 Paper recommendation system
-- 🔄 Research workflow automation
-- 🔄 Citation graph analysis
-- 🔄 Multi-user support with authentication
+- 📋 Support for more paper sources (PubMed, IEEE, etc.)
+- 📋 Intelligent knowledge base curation agent
+- 📋 Paper recommendation system
+- 📋 Research workflow automation
+- 📋 Citation graph analysis
+- 📋 Multi-user support with authentication
+- 📋 Custom embedding models
+- 📋 Offline LLM support (Ollama integration)
 
 ---
 
 ## 🐛 Troubleshooting
 
-### API Won't Start
+### Services Won't Start
 
 ```bash
-# Check infrastructure health
-docker-compose ps
+# Check Docker is running
+docker ps
 
-# Verify OpenAI API key is set
-grep OPENAI_API_KEY .env
+# Check for port conflicts
+lsof -i :3000  # Frontend
+lsof -i :8000  # API
+lsof -i :9000  # MinIO
 
-# View API logs
+# Restart all services
+docker-compose down
+docker-compose up -d
+
+# Check logs for errors
 docker-compose logs research_api
+```
+
+### Frontend Shows Blank Page
+
+```bash
+# Hard refresh browser
+# Chrome/Edge: Ctrl+Shift+R (Windows) or Cmd+Shift+R (Mac)
+# Firefox: Ctrl+F5 or Cmd+Shift+R
+
+# Check if frontend container is running
+docker-compose ps research_frontend
+
+# Check nginx logs
+docker-compose logs research_frontend
 ```
 
 ### Q&A Returns No Results
@@ -417,23 +540,52 @@ curl http://localhost:8000/research/knowledge-base/stats
 
 # Verify Qdrant has vectors
 curl http://localhost:6333/collections/research_vectors
+
+# Check Qdrant logs
+docker-compose logs research_qdrant
 ```
 
-### Frontend Can't Connect
+### Chat History Not Saving
 
 ```bash
-# Check API is accessible
-curl http://localhost:8000/health
+# Check Redis is running
+docker-compose ps research_redis
 
-# Verify nginx config
-docker-compose exec research_frontend cat /etc/nginx/conf.d/default.conf
+# Test Redis connection
+docker-compose exec research_redis redis-cli ping
+# Should return: PONG
+
+# Check conversation API
+curl http://localhost:8000/research/conversations
 ```
+
+### PDF Viewing Not Working
+
+```bash
+# Check MinIO is accessible
+curl http://localhost:9000/minio/health/live
+
+# Test PDF endpoint directly
+curl -I http://localhost:8000/research/knowledge-base/papers/{paper_id}/pdf
+
+# Check MinIO logs
+docker-compose logs research_minio
+```
+
+---
+
+## 📚 Documentation
+
+- **[User Manual](USER_MANUAL.md)** - Comprehensive guide for using Praval Deep Research
+- **[User Manual PDF](USER_MANUAL.pdf)** - Printable version
+- **[Design Document](DESIGN.md)** - System architecture and design decisions
+- **[Project Guidelines](CLAUDE.md)** - Development standards and best practices
 
 ---
 
 ## 📄 License
 
-MIT License - see LICENSE file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -443,16 +595,25 @@ MIT License - see LICENSE file for details.
 - **[ArXiv](https://arxiv.org)** - Open access to research papers
 - **[Qdrant](https://qdrant.tech)** - High-performance vector database
 - **[FastAPI](https://fastapi.tiangolo.com)** - Modern Python web framework
+- **[React](https://react.dev)** - UI component library
 - **[OpenAI](https://openai.com)** - Embeddings and language models
+- **[Tailwind CSS](https://tailwindcss.com)** - Utility-first CSS framework
 
 ---
 
 ## 📞 Support
 
-- **Documentation**: See `/docs` folder for detailed guides
-- **Issues**: GitHub issues for bug reports and feature requests
+- **User Manual**: See [USER_MANUAL.md](USER_MANUAL.md) for detailed usage guide
+- **Issues**: [GitHub Issues](https://github.com/aiexplorations/praval_deep_research/issues) for bug reports and feature requests
 - **Praval Framework**: [pravalagents.com](https://pravalagents.com) for framework documentation
+- **Community**: Discussions and questions welcome in GitHub Discussions
 
 ---
 
+<div align="center">
+
 **Built with ❤️ using Praval - Demonstrating production-grade agentic architecture for research automation.**
+
+[Praval Framework](https://pravalagents.com) | [Documentation](USER_MANUAL.md) | [Issues](https://github.com/aiexplorations/praval_deep_research/issues)
+
+</div>
