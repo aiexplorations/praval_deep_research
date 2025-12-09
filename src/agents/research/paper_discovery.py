@@ -64,8 +64,12 @@ def paper_discovery_agent(spore: Spore) -> None:
     successful_patterns = paper_discovery_agent.recall("successful_query", limit=10)
     
     optimized_query = query  # Default to original
+
+    # Check for exact match intent (quotes or specific ArXiv prefixes)
+    # If user wants exact match, we shouldn't rewrite their query
+    is_exact_match = '"' in query or any(p in query for p in ["ti:", "au:", "abs:", "cat:", "id:"])
     
-    if past_searches or successful_patterns:
+    if (past_searches or successful_patterns) and not is_exact_match:
         optimization_context = {
             "domain_history": [mem.content for mem in past_searches],
             "successful_patterns": [mem.content for mem in successful_patterns],
@@ -155,18 +159,12 @@ def paper_discovery_agent(spore: Spore) -> None:
         logger.info(f"📡 BROADCASTING papers_found event")
         logger.info(f"   Papers count: {len(filtered_papers)}")
         logger.info(f"   Broadcast type: papers_found")
-        logger.info(f"   Target channel: document_processor_channel")
 
-        # Broadcast results via spore communication to document processor
-        from praval import get_reef
-        reef = get_reef()
-        broadcast_result = reef.broadcast(
-            from_agent='paper_searcher',
-            knowledge=broadcast_payload,
-            channel='document_processor_channel'
-        )
+        # Broadcast results via Praval's broadcast() function
+        # Message routing is handled by responds_to filtering, not channels
+        broadcast(broadcast_payload)
 
-        logger.info(f"✅ BROADCAST COMPLETE - Result: {broadcast_result}")
+        logger.info(f"✅ BROADCAST COMPLETE - papers_found sent to all agents")
         logger.info("=" * 80)
         
     except ArXivAPIError as e:

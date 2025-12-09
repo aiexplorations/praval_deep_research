@@ -1,171 +1,188 @@
 """
-RabbitMQ messaging for inter-container communication.
+Simple messaging using Praval's reef.broadcast() on shared "broadcast" channel.
 
-Provides message publishing and consumption for communication
-between API and agent containers.
+The API container uses the same Reef + RabbitMQ backend as agents.
+All agents subscribe to the "broadcast" channel and filter by type
+using their responds_to configuration.
+
+This matches the pattern used by start_agents() for local mode.
 """
 
-import json
+import asyncio
 import logging
 from typing import Dict, Any, Optional
-import pika
-from pika.exceptions import AMQPConnectionError
+
+from praval.core.reef import Reef, get_reef
+from praval.core.reef_backend import RabbitMQBackend
 
 from .config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Must match the channel used in run_agents.py
+BROADCAST_CHANNEL = "broadcast"
+
 
 class MessagePublisher:
-    """Publishes messages to RabbitMQ for agent consumption."""
+    """
+    Simple message publisher using Praval's reef.broadcast().
+
+    Shares the same exchange and channel as the agents container.
+    """
 
     def __init__(self):
-        """Initialize message publisher."""
         self.settings = get_settings()
-        self.connection = None
-        self.channel = None
-        self._connect()
+        self.reef: Optional[Reef] = None
+        self._initialized = False
 
-    def _connect(self):
-        """Establish connection to RabbitMQ."""
-        try:
-            # Parse RabbitMQ URL
-            params = pika.URLParameters(self.settings.RABBITMQ_URL)
-            self.connection = pika.BlockingConnection(params)
-            self.channel = self.connection.channel()
-
-            # Declare exchange and queue
-            self.channel.exchange_declare(
-                exchange='research_agents',
-                exchange_type='topic',
-                durable=True
-            )
-
-            logger.info("Connected to RabbitMQ")
-
-        except AMQPConnectionError as e:
-            logger.error(f"Failed to connect to RabbitMQ: {e}")
-            self.connection = None
-            self.channel = None
-
-    def publish_search_request(self, query: str, domain: str, max_results: int,
-                               session_id: str, **kwargs) -> bool:
-        """
-        Publish a search request for paper discovery agents.
-
-        Args:
-            query: Search query
-            domain: Research domain
-            max_results: Maximum number of results
-            session_id: Session identifier
-            **kwargs: Additional parameters
-
-        Returns:
-            True if published successfully, False otherwise
-        """
-        # Reconnect if channel is closed
-        if not self.channel or self.channel.is_closed:
-            logger.warning("RabbitMQ channel closed, reconnecting...")
-            self._connect()
-
-        if not self.channel:
-            logger.error("Failed to establish RabbitMQ connection")
-            return False
-
-        message = {
-            "type": "search_request",
-            "query": query,
-            "domain": domain,
-            "max_results": max_results,
-            "session_id": session_id,
-            **kwargs
-        }
+    async def initialize(self):
+        """Initialize Reef with RabbitMQ backend."""
+        if self._initialized:
+            return
 
         try:
-            self.channel.basic_publish(
-                exchange='research_agents',
-                routing_key='search.request',
-                body=json.dumps(message),
-                properties=pika.BasicProperties(
-                    delivery_mode=2,  # Persistent
-                    content_type='application/json'
-                )
-            )
-            logger.info(f"✅ Published search request: {session_id} for query: '{query}'")
-            return True
+            backend = RabbitMQBackend()
+            self.reef = Reef(backend=backend)
+
+            await self.reef.initialize_backend({
+                'url': self.settings.RABBITMQ_URL,
+                'exchange_name': 'praval.research',  # Same as agents
+            })
+
+            # Create the broadcast channel (same as agents use)
+            self.reef.create_channel(BROADCAST_CHANNEL)
+
+            self._initialized = True
+            logger.info(f"MessagePublisher initialized with RabbitMQ (channel: {BROADCAST_CHANNEL})")
 
         except Exception as e:
-            logger.error(f"❌ Failed to publish message: {e}")
-            # Try to reconnect for next time
+            logger.error(f"Failed to initialize MessagePublisher: {e}")
+            raise
+
+    def broadcast_sync(self, knowledge: Dict[str, Any]) -> str:
+        """
+        Broadcast a message synchronously.
+
+        Uses reef.broadcast() on the shared broadcast channel.
+        Agents filter by knowledge["type"] using responds_to.
+        """
+        if not self._initialized or not self.reef:
+            # Try to initialize
             try:
-                self._connect()
-            except:
-                pass
-            return False
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule but can't wait - use global reef as fallback
+                    asyncio.ensure_future(self.initialize())
+                    reef = get_reef()
+                    reef.create_channel(BROADCAST_CHANNEL)
+                    return reef.broadcast(
+                        from_agent="api",
+                        knowledge=knowledge,
+                        channel=BROADCAST_CHANNEL
+                    )
+                else:
+                    loop.run_until_complete(self.initialize())
+            except RuntimeError:
+                asyncio.run(self.initialize())
 
-    def publish_qa_request(self, question: str, session_id: str, **kwargs) -> bool:
-        """
-        Publish a Q&A request for QA specialist agents.
+        return self.reef.broadcast(
+            from_agent="api",
+            knowledge=knowledge,
+            channel=BROADCAST_CHANNEL
+        )
 
-        Args:
-            question: User question
-            session_id: Session identifier
-            **kwargs: Additional parameters
+    async def broadcast_async(self, knowledge: Dict[str, Any]) -> str:
+        """Broadcast a message asynchronously on the shared broadcast channel."""
+        await self.initialize()
+        return self.reef.broadcast(
+            from_agent="api",
+            knowledge=knowledge,
+            channel=BROADCAST_CHANNEL
+        )
 
-        Returns:
-            True if published successfully, False otherwise
-        """
-        # Reconnect if channel is closed
-        if not self.channel or self.channel.is_closed:
-            logger.warning("RabbitMQ channel closed, reconnecting...")
-            self._connect()
-
-        if not self.channel:
-            logger.error("Failed to establish RabbitMQ connection")
-            return False
-
-        message = {
-            "type": "qa_request",
-            "question": question,
-            "session_id": session_id,
-            **kwargs
-        }
-
+    async def publish_search_request(
+        self,
+        query: str,
+        domain: str,
+        max_results: int,
+        session_id: str,
+        **kwargs
+    ) -> bool:
+        """Publish search request. paper_searcher responds_to: search_request"""
         try:
-            self.channel.basic_publish(
-                exchange='research_agents',
-                routing_key='qa.request',
-                body=json.dumps(message),
-                properties=pika.BasicProperties(
-                    delivery_mode=2,
-                    content_type='application/json'
-                )
-            )
-            logger.info(f"✅ Published Q&A request: {session_id} for question: '{question[:50]}...'")
+            await self.broadcast_async({
+                "type": "search_request",
+                "query": query,
+                "domain": domain,
+                "max_results": max_results,
+                "session_id": session_id,
+                **kwargs
+            })
+            logger.info(f"Published search_request: {query}")
             return True
-
         except Exception as e:
-            logger.error(f"❌ Failed to publish message: {e}")
-            # Try to reconnect for next time
-            try:
-                self._connect()
-            except:
-                pass
+            logger.error(f"Failed to publish search_request: {e}")
             return False
 
-    def close(self):
-        """Close RabbitMQ connection."""
-        if self.connection and not self.connection.is_closed:
-            self.connection.close()
-            logger.info("Closed RabbitMQ connection")
+    async def publish_qa_request(
+        self,
+        question: str,
+        session_id: str,
+        **kwargs
+    ) -> bool:
+        """Publish Q&A request. qa_specialist responds_to: user_query"""
+        try:
+            await self.broadcast_async({
+                "type": "user_query",
+                "query": question,
+                "session_id": session_id,
+                **kwargs
+            })
+            logger.info(f"Published user_query: {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to publish user_query: {e}")
+            return False
+
+    async def publish_index_request(
+        self,
+        papers: list,
+        session_id: str,
+        **kwargs
+    ) -> bool:
+        """Publish papers for indexing. document_processor responds_to: papers_found"""
+        try:
+            await self.broadcast_async({
+                "type": "papers_found",
+                "papers": papers,
+                "original_query": f"Manual selection of {len(papers)} papers",
+                "search_metadata": {
+                    "domain": "user_selected",
+                    "manual_selection": True,
+                    "results_count": len(papers)
+                },
+                "session_id": session_id,
+                **kwargs
+            })
+            logger.info(f"Published papers_found: {len(papers)} papers")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to publish papers_found: {e}")
+            return False
+
+    async def close(self):
+        """Close the connection."""
+        if self.reef:
+            await self.reef.close_backend()
+            self.reef.shutdown()
 
 
-# Global publisher instance
+# Global instance
 _publisher: Optional[MessagePublisher] = None
 
 
 def get_publisher() -> MessagePublisher:
-    """Get or create global message publisher."""
+    """Get or create global publisher."""
     global _publisher
     if _publisher is None:
         _publisher = MessagePublisher()

@@ -7,8 +7,10 @@ and intelligent text chunking for embedding generation.
 
 import io
 import re
+import time
 from typing import List, Dict, Any
 import aiohttp
+import requests
 import structlog
 import pdfplumber
 from PyPDF2 import PdfReader
@@ -120,6 +122,77 @@ class PDFProcessor:
             if attempt < max_retries - 1:
                 import asyncio
                 await asyncio.sleep(2 ** attempt)
+
+        raise PDFProcessingError(
+            f"Failed to download PDF for {arxiv_id} after {max_retries} attempts"
+        )
+
+    def download_from_arxiv_sync(
+        self,
+        arxiv_id: str,
+        max_retries: int = 3
+    ) -> bytes:
+        """
+        Download PDF from ArXiv synchronously.
+
+        Use this method when calling from a synchronous context that's already
+        running inside an async event loop (e.g., Praval agents with RabbitMQ).
+
+        Args:
+            arxiv_id: ArXiv paper ID (e.g., "2106.04560")
+            max_retries: Number of download retries
+
+        Returns:
+            PDF file data as bytes
+
+        Raises:
+            PDFProcessingError: If download fails after retries
+        """
+        pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(pdf_url, timeout=60)
+
+                if response.status_code == 200:
+                    pdf_data = response.content
+
+                    logger.info(
+                        "PDF downloaded successfully (sync)",
+                        arxiv_id=arxiv_id,
+                        size_bytes=len(pdf_data),
+                        attempt=attempt + 1
+                    )
+
+                    return pdf_data
+
+                else:
+                    logger.warning(
+                        "PDF download failed",
+                        arxiv_id=arxiv_id,
+                        status=response.status_code,
+                        attempt=attempt + 1
+                    )
+
+            except requests.RequestException as e:
+                logger.warning(
+                    "Network error downloading PDF",
+                    arxiv_id=arxiv_id,
+                    error=str(e),
+                    attempt=attempt + 1
+                )
+
+            except Exception as e:
+                logger.error(
+                    "Unexpected error downloading PDF",
+                    arxiv_id=arxiv_id,
+                    error=str(e),
+                    attempt=attempt + 1
+                )
+
+            # Wait before retry (exponential backoff)
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
 
         raise PDFProcessingError(
             f"Failed to download PDF for {arxiv_id} after {max_retries} attempts"
