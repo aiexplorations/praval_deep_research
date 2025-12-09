@@ -94,12 +94,25 @@ class ArXivClient:
         # Escape query for URL
         escaped_query = quote_plus(query)
         
+        # Check if query already contains field prefixes (advanced query)
+        # We check the original query for prefixes, as escaped_query has them encoded
+        is_advanced = any(prefix in query for prefix in ["ti:", "au:", "abs:", "cat:", "all:", "id:"])
+        
+        if is_advanced:
+            # Don't prepend 'all:', trust the user's field specifiers
+            search_query = escaped_query
+        else:
+            # Default to searching all fields
+            search_query = f"all:{escaped_query}"
+        
         # Add category filter if domain specified
         if domain and domain.lower() in domain_categories:
             category = domain_categories[domain.lower()]
-            search_query = f"all:{escaped_query} AND cat:{category}"
-        else:
-            search_query = f"all:{escaped_query}"
+            # Append AND if it's not already in the query
+            if "cat:" not in query:
+                search_query = f"{search_query} AND cat:{category}"
+            elif not is_advanced: # Only force category for basic queries if ambiguous
+                 search_query = f"{search_query} AND cat:{category}"
             
         return search_query
     

@@ -79,9 +79,36 @@ def qa_specialist_agent(spore: Spore) -> None:
         import time
         start_time = time.time()
 
-        # STEP 1: Generate query embedding
-        logger.debug(f"Generating query embedding for: {user_query}")
-        query_embedding = embeddings_gen.generate_embedding(user_query)
+        # STEP 1: Contextualize Query (if history exists)
+        search_query = user_query
+        
+        if conversation_context and len(conversation_context) > 0:
+            logger.info("Contextualizing query using conversation history...")
+            context_str = "\n".join(conversation_context[-4:]) # Last 2 turns
+            
+            rewrite_prompt = f"""
+            Given the conversation history, rewrite the last user question to be a standalone search query.
+            Resolve any coreferences (it, that, he, she) to their actual subjects.
+            Keep the query concise and focused on the research topic.
+            
+            History:
+            {context_str}
+            
+            Last User Question: {user_query}
+            
+            Standalone Search Query (just the text):
+            """
+            
+            rewritten = chat(rewrite_prompt)
+            if rewritten and len(rewritten) < 200:
+                search_query = rewritten.strip().strip('"')
+                logger.info(f"Rewrote query: '{user_query}' -> '{search_query}'")
+            else:
+                logger.warning("Rewriting failed or produced long output, using original query")
+
+        # STEP 2: Generate query embedding
+        logger.debug(f"Generating query embedding for: {search_query}")
+        query_embedding = embeddings_gen.generate_embedding(search_query)
 
         # STEP 2: Search Qdrant for relevant chunks
         logger.debug("Searching Qdrant for relevant paper chunks...")

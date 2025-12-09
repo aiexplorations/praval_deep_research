@@ -6,7 +6,6 @@ and storing research papers with intelligent extraction and metadata
 organization.
 """
 
-import asyncio
 import logging
 from typing import Dict, Any, List
 from datetime import datetime, timezone
@@ -110,6 +109,12 @@ def document_processing_agent(spore: Spore) -> None:
         paper_title = paper.get('title', 'Untitled')
         arxiv_id = paper.get('arxiv_id', '')
 
+        # DEBUG: Log full paper content to diagnose 'unknown' issue
+        logger.info(f"🔍 Processing Paper Data: {paper}")
+        logger.info(f"   Title: '{paper_title}'")
+        logger.info(f"   ID: '{arxiv_id}'")
+        logger.info(f"   Authors: {paper.get('authors')}")
+
         logger.info(f"⚙️ Processing {i}/{len(papers)}: {paper_title[:60]}...")
 
         try:
@@ -161,13 +166,12 @@ def document_processing_agent(spore: Spore) -> None:
 
             if arxiv_id:
                 try:
-                    # Download PDF from ArXiv
+                    # Download PDF from ArXiv using synchronous method
+                    # (agent runs in sync context inside async event loop)
                     logger.debug(f"Downloading PDF for {arxiv_id}...")
-                    pdf_data = asyncio.run(
-                        pdf_processor.download_from_arxiv(
-                            arxiv_id,
-                            max_retries=settings.PDF_MAX_RETRIES
-                        )
+                    pdf_data = pdf_processor.download_from_arxiv_sync(
+                        arxiv_id,
+                        max_retries=settings.PDF_MAX_RETRIES
                     )
                     processing_stats["pdf_downloaded"] += 1
 

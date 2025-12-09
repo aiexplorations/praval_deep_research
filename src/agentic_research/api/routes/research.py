@@ -200,7 +200,7 @@ async def search_papers(
             # Send message to agents via RabbitMQ
             try:
                 publisher = get_publisher()
-                publisher.publish_search_request(
+                broadcast_result = await publisher.publish_search_request(
                     query=query.query,
                     domain=query.domain.value,
                     max_results=query.max_results,
@@ -230,7 +230,8 @@ async def search_papers(
                     "Research workflow initiated via Praval agents",
                     total_found=len(real_papers),
                     after_filtering=len(filtered_papers),
-                    agents_triggered=True
+                    agents_triggered=True,
+                    broadcast_id=broadcast_result
                 )
                 
             except ArXivAPIError as e:
@@ -359,10 +360,32 @@ async def ask_question(
                 if request.context is not None:
                     publish_kwargs["context"] = request.context
 
-                publisher.publish_qa_request(**publish_kwargs)
+                # RETRIEVE AND PASS CONVERSATION HISTORY
+                if request.conversation_id:
+                    try:
+                        from agentic_research.storage.conversation_store import get_conversation_store
+                        store = get_conversation_store()
+                        
+                        # Get last 5 messages for context
+                        # We use get_conversation which likely returns messages, or we might need a specific method
+                        # Assuming conversation object has messages or we can fetch them
+                        history = await store.get_messages(request.conversation_id, limit=6) # Get last 3 turns
+                        
+                        conversation_context = []
+                        if history:
+                            for msg in history:
+                                conversation_context.append(f"{msg.role}: {msg.content}")
+                                
+                        publish_kwargs["conversation_context"] = conversation_context
+                        logger.info(f"Attached {len(conversation_context)} messages of history to Q&A request")
+                    except Exception as hist_err:
+                        logger.warning(f"Failed to attach conversation history: {hist_err}")
+
+                broadcast_result = await publisher.publish_qa_request(**publish_kwargs)
                 logger.info("Successfully published Q&A request to agents",
                            session_id=session_id,
-                           agents_ready=agents_ready)
+                           agents_ready=agents_ready,
+                           broadcast_id=broadcast_result)
             except Exception as pub_error:
                 # Log but don't fail - we can still process directly
                 logger.warning("Failed to publish Q&A request to agents, continuing with direct processing",
@@ -778,31 +801,11 @@ async def index_papers(
             paper_count=len(papers)
         )
 
-        # Publish papers_found message directly to document processor channel
-        from praval import get_reef
-        reef = get_reef()
-
-        # Format payload for document processor
-        broadcast_payload = {
-            "type": "papers_found",
-            "papers": papers,
-            "original_query": f"User selected {len(papers)} papers for indexing",
-            "optimized_query": "manual_selection",
-            "search_metadata": {
-                "domain": "user_selected",
-                "optimization_used": False,
-                "results_count": len(papers),
-                "quality_threshold": 0.0,
-                "memory_contexts_used": 0,
-                "manual_selection": True
-            }
-        }
-
-        # Broadcast to document processor agent channel
-        broadcast_result = reef.broadcast(
-            from_agent='api_manual_index',
-            knowledge=broadcast_payload,
-            channel='document_processor_channel'
+        # Use native Praval publisher to send papers_found message
+        publisher = get_publisher()
+        broadcast_result = await publisher.publish_index_request(
+            papers=papers,
+            session_id=session_id
         )
 
         logger.info(
