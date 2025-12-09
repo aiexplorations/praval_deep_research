@@ -18,7 +18,9 @@ export default function Chat() {
   const [question, setQuestion] = useState('');
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set());
   const [showSidebar, setShowSidebar] = useState(true);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const { currentConversationId, setCurrentConversation, messages, addMessage, clearMessages } = useChatStore();
 
@@ -49,7 +51,7 @@ export default function Chat() {
       console.log('Loaded conversation:', data.id, 'with', data.messages?.length, 'messages');
       setCurrentConversation(data.id);
       clearMessages();
-      // Load messages from conversation
+      // Load messages from conversation with branching info
       if (data.messages) {
         data.messages.forEach((msg: any) => {
           addMessage({
@@ -57,7 +59,13 @@ export default function Chat() {
             role: msg.role,
             content: msg.content,
             sources: msg.sources,
-            timestamp: msg.timestamp
+            timestamp: msg.timestamp,
+            parent_message_id: msg.parent_message_id,
+            branch_id: msg.branch_id,
+            branch_index: msg.branch_index,
+            has_branches: msg.has_branches,
+            sibling_count: msg.sibling_count,
+            sibling_index: msg.sibling_index
           });
         });
       }
@@ -135,6 +143,12 @@ export default function Chat() {
       addMessage(assistantMessage);
       // Refresh conversations list to update titles/timestamps
       refetchConversations();
+      // Reload conversation to get server-side message IDs for branching
+      if (currentConversationId) {
+        setTimeout(() => {
+          loadConversationMutation.mutate(currentConversationId);
+        }, 500);
+      }
     },
     onError: (error: any) => {
       const errorMessage: Message = {
@@ -215,6 +229,77 @@ export default function Chat() {
       // Could show a toast notification here
       console.log('Copied with citations!');
     });
+  };
+
+  // Start editing a message
+  const handleStartEdit = (message: Message) => {
+    setEditingMessageId(message.id);
+    setQuestion(message.content);
+    inputRef.current?.focus();
+  };
+
+  // Cancel editing
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setQuestion('');
+  };
+
+  // Edit message mutation (creates a branch)
+  const editMessageMutation = useMutation({
+    mutationFn: async ({ messageId, newContent }: { messageId: string; newContent: string }) => {
+      if (!currentConversationId) throw new Error('No conversation selected');
+      return apiClient.editMessage(currentConversationId, messageId, newContent);
+    },
+    onSuccess: async (data) => {
+      console.log('Branch created:', data);
+      setEditingMessageId(null);
+      setQuestion('');
+      // Reload conversation to get updated branch
+      if (currentConversationId) {
+        loadConversationMutation.mutate(currentConversationId);
+      }
+    },
+    onError: (error: any) => {
+      console.error('Edit message error:', error);
+      alert(`Failed to edit message: ${error.message || 'Unknown error'}`);
+    }
+  });
+
+  // Switch branch mutation
+  const switchBranchMutation = useMutation({
+    mutationFn: async ({ messageId, direction }: { messageId: string; direction: 'left' | 'right' }) => {
+      if (!currentConversationId) throw new Error('No conversation selected');
+      return apiClient.switchBranch(currentConversationId, { message_id: messageId, direction });
+    },
+    onSuccess: (data) => {
+      console.log('Branch switched:', data);
+      // Update messages from response
+      if (data.messages) {
+        clearMessages();
+        data.messages.forEach((msg: any) => {
+          addMessage({
+            id: msg.id,
+            role: msg.role,
+            content: msg.content,
+            sources: msg.sources,
+            timestamp: msg.timestamp,
+            parent_message_id: msg.parent_message_id,
+            branch_id: msg.branch_id,
+            branch_index: msg.branch_index,
+            sibling_count: msg.sibling_count,
+            sibling_index: msg.sibling_index
+          });
+        });
+      }
+    },
+    onError: (error: any) => {
+      console.error('Switch branch error:', error);
+    }
+  });
+
+  // Handle branch navigation
+  const handleSwitchBranch = (messageId: string, direction: 'left' | 'right') => {
+    switchBranchMutation.mutate({ messageId, direction });
   };
 
   return (
@@ -330,7 +415,7 @@ export default function Chat() {
               messages.map((message) => (
                 <div
                   key={message.id}
-                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} group`}
                 >
                   <div
                     className={`max-w-[80%] rounded-2xl px-5 py-3 shadow-sm ${
@@ -339,6 +424,29 @@ export default function Chat() {
                         : 'bg-card border border-border text-card-foreground'
                     }`}
                   >
+                    {/* Branch Navigation (< 1/3 > style) */}
+                    {message.sibling_count && message.sibling_count > 1 && (
+                      <div className="flex items-center justify-center gap-2 mb-2 text-xs opacity-80">
+                        <button
+                          onClick={() => handleSwitchBranch(message.id, 'left')}
+                          disabled={(message.sibling_index || 0) <= 0 || switchBranchMutation.isPending}
+                          className="px-2 py-1 rounded hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Previous version"
+                        >
+                          ◀
+                        </button>
+                        <span>{(message.sibling_index || 0) + 1}/{message.sibling_count}</span>
+                        <button
+                          onClick={() => handleSwitchBranch(message.id, 'right')}
+                          disabled={(message.sibling_index || 0) >= (message.sibling_count - 1) || switchBranchMutation.isPending}
+                          className="px-2 py-1 rounded hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Next version"
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    )}
+
                     <div className="prose prose-sm max-w-none dark:prose-invert">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm, remarkMath]}
@@ -347,6 +455,20 @@ export default function Chat() {
                         {message.content}
                       </ReactMarkdown>
                     </div>
+
+                    {/* Edit button for user messages (only if we have a server ID) */}
+                    {message.role === 'user' && !message.id.startsWith('msg-') && (
+                      <div className="mt-2 pt-2 border-t border-white/20 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => handleStartEdit(message)}
+                          disabled={editMessageMutation.isPending}
+                          className="text-xs px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded transition-colors flex items-center gap-1"
+                          title="Edit & resubmit"
+                        >
+                          ✏️ Edit
+                        </button>
+                      </div>
+                    )}
 
                     {/* Copy with Citations button for assistant messages */}
                     {message.role === 'assistant' && (
@@ -430,21 +552,55 @@ export default function Chat() {
 
         {/* Input Form - Fixed at bottom */}
         <div className="border-t border-border px-6 py-4 bg-background shrink-0">
-          <form onSubmit={handleSubmit} className="container mx-auto max-w-4xl flex gap-2">
+          {editingMessageId && (
+            <div className="container mx-auto max-w-4xl mb-2">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted px-3 py-2 rounded-lg">
+                <span>✏️ Editing message - this will create a new branch</span>
+                <button
+                  onClick={handleCancelEdit}
+                  className="ml-auto text-xs px-2 py-1 bg-background rounded hover:bg-muted-foreground/10"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (editingMessageId) {
+                // Submit edit (creates branch)
+                editMessageMutation.mutate({
+                  messageId: editingMessageId,
+                  newContent: question.trim()
+                });
+              } else {
+                handleSubmit(e);
+              }
+            }}
+            className="container mx-auto max-w-4xl flex gap-2"
+          >
             <input
+              ref={inputRef}
               type="text"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              placeholder="Ask a question about your papers..."
-              className="flex-1 px-4 py-3 border border-input rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-              disabled={askMutation.isPending}
+              placeholder={editingMessageId ? "Edit your message..." : "Ask a question about your papers..."}
+              className={`flex-1 px-4 py-3 border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring ${
+                editingMessageId ? 'border-amber-500' : 'border-input'
+              }`}
+              disabled={askMutation.isPending || editMessageMutation.isPending}
             />
             <button
               type="submit"
-              disabled={!question.trim() || askMutation.isPending}
-              className="px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              disabled={!question.trim() || askMutation.isPending || editMessageMutation.isPending}
+              className={`px-6 py-3 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
+                editingMessageId
+                  ? 'bg-amber-500 text-white hover:bg-amber-600'
+                  : 'bg-primary text-primary-foreground hover:bg-primary/90'
+              }`}
             >
-              Ask
+              {editMessageMutation.isPending ? 'Creating Branch...' : editingMessageId ? 'Resubmit' : 'Ask'}
             </button>
           </form>
         </div>

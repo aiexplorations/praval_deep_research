@@ -46,6 +46,14 @@ export interface Message {
   content: string;
   sources?: Source[];
   timestamp: string;
+  // Branching fields
+  parent_message_id?: string | null;
+  branch_id?: string | null;
+  branch_index?: number;
+  // Computed UI fields
+  has_branches?: boolean;
+  sibling_count?: number;
+  sibling_index?: number;
 }
 
 export interface QuestionRequest {
@@ -89,10 +97,26 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   message_count: number;
+  active_branch_id?: string | null;
 }
 
 export interface ConversationWithMessages extends Conversation {
   messages: Message[];
+}
+
+// Branch info types
+export interface BranchInfo {
+  message_id: string;
+  branch_count: number;
+  branches: BranchDetail[];
+}
+
+export interface BranchDetail {
+  branch_id: string | null;
+  branch_index: number;
+  message_id: string;
+  first_message_preview: string;
+  timestamp: string;
 }
 
 // Knowledge Base types

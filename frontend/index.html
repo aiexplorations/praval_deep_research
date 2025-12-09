@@ -136,6 +136,31 @@
         .source-citation {
             border-left: 3px solid #3b82f6;
         }
+
+        /* Edit button styling */
+        .edit-button {
+            transition: opacity 0.2s, background-color 0.2s;
+        }
+
+        .group:hover .edit-button {
+            opacity: 1;
+        }
+
+        /* Branch navigation styling */
+        .branch-nav {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 4px;
+            padding: 2px;
+        }
+
+        .branch-nav button:hover:not(:disabled) {
+            background-color: #e5e7eb;
+        }
+
+        /* Message group hover effects */
+        .group:hover .message-user {
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
     </style>
 </head>
 <body class="bg-gray-50">

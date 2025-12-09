@@ -224,6 +224,67 @@ class APIClient {
     return response.data;
   }
 
+  // Branching Operations
+  async editMessage(
+    conversationId: string,
+    messageId: string,
+    newContent: string
+  ): Promise<{
+    message: any;
+    branch_id: string;
+    branch_index: number;
+    sibling_count: number;
+    status: string;
+  }> {
+    const response = await this.client.post(
+      `/research/conversations/${conversationId}/messages/${messageId}/edit`,
+      { new_content: newContent }
+    );
+    return response.data;
+  }
+
+  async switchBranch(
+    conversationId: string,
+    params: { branch_id?: string; message_id?: string; direction?: 'left' | 'right' }
+  ): Promise<{
+    active_branch_id: string | null;
+    messages: any[];
+    status: string;
+  }> {
+    const response = await this.client.post(
+      `/research/conversations/${conversationId}/switch-branch`,
+      params
+    );
+    return response.data;
+  }
+
+  async getBranchesAtMessage(
+    conversationId: string,
+    messageId: string
+  ): Promise<{
+    message_id: string;
+    branch_count: number;
+    branches: Array<{
+      branch_id: string | null;
+      branch_index: number;
+      message_id: string;
+      first_message_preview: string;
+      timestamp: string;
+    }>;
+  }> {
+    const response = await this.client.get(
+      `/research/conversations/${conversationId}/messages/${messageId}/branches`
+    );
+    return response.data;
+  }
+
+  async deleteBranch(conversationId: string, branchId: string): Promise<{ message: string; status: string }> {
+    const response = await this.client.delete(
+      `/research/conversations/${conversationId}/branches/${branchId}`
+    );
+    return response.data;
+  }
+
   async exportConversation(id: string, format: 'markdown' | 'json' | 'pdf'): Promise<Blob> {
     const response = await this.client.post(
       `/conversations/${id}/export`,

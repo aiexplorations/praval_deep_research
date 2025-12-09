@@ -1350,24 +1350,282 @@ async def update_conversation(
 async def delete_conversation(conversation_id: str) -> Dict[str, Any]:
     """
     Delete a conversation and all its messages.
-    
+
     Args:
         conversation_id: UUID of the conversation
-        
+
     Returns:
         Success message
     """
     try:
         from agentic_research.storage.conversation_store import get_conversation_store
-        
+
         store = get_conversation_store()
         await store.delete_conversation(conversation_id)
-        
+
         return {"message": f"Conversation {conversation_id} deleted successfully"}
-    
+
     except Exception as e:
         logger.error("Failed to delete conversation", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete conversation: {str(e)}"
+        )
+
+
+# ==========================================
+# Branched Conversation Endpoints
+# ==========================================
+
+class EditMessageRequest(BaseModel):
+    """Request model for editing a message (creates a branch)."""
+    new_content: str
+
+
+class SwitchBranchRequest(BaseModel):
+    """Request model for switching branches."""
+    branch_id: Optional[str] = None
+    message_id: Optional[str] = None
+    direction: Optional[str] = None  # 'left' or 'right'
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/edit", summary="Edit a message (creates branch)")
+async def edit_message(
+    conversation_id: str,
+    message_id: str,
+    request: EditMessageRequest
+) -> Dict[str, Any]:
+    """
+    Edit a user message by creating a new branch.
+
+    This creates a new branch in the conversation tree, preserving the original
+    message and its responses. The new branch becomes active, and a new response
+    will be generated for the edited message.
+
+    Args:
+        conversation_id: UUID of the conversation
+        message_id: UUID of the message to edit (must be a user message)
+        request: The new content for the message
+
+    Returns:
+        The newly created message in the new branch
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+
+        store = get_conversation_store()
+
+        # Edit the message (creates a new branch)
+        new_message = await store.edit_message(
+            conv_id=conversation_id,
+            message_id=message_id,
+            new_content=request.new_content
+        )
+
+        logger.info(
+            "Created new branch from message edit",
+            conversation_id=conversation_id,
+            original_message_id=message_id,
+            new_message_id=new_message.id,
+            branch_id=new_message.branch_id
+        )
+
+        return {
+            "message": new_message.model_dump(),
+            "branch_id": new_message.branch_id,
+            "branch_index": new_message.branch_index,
+            "sibling_count": new_message.sibling_count,
+            "status": "branch_created"
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to edit message",
+            conversation_id=conversation_id,
+            message_id=message_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to edit message: {str(e)}"
+        )
+
+
+@router.post("/conversations/{conversation_id}/switch-branch", summary="Switch active branch")
+async def switch_branch(
+    conversation_id: str,
+    request: SwitchBranchRequest
+) -> Dict[str, Any]:
+    """
+    Switch to a different branch in the conversation.
+
+    Can be called in two ways:
+    1. With branch_id: Switch directly to that branch
+    2. With message_id and direction: Navigate left/right among sibling branches
+
+    Args:
+        conversation_id: UUID of the conversation
+        request: Branch switch parameters
+
+    Returns:
+        The new active branch ID and updated messages
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+
+        store = get_conversation_store()
+
+        # Switch branch
+        new_branch_id = await store.switch_branch(
+            conv_id=conversation_id,
+            branch_id=request.branch_id,
+            message_id=request.message_id,
+            direction=request.direction
+        )
+
+        # Get updated messages for the new branch
+        messages = await store.get_messages(conversation_id)
+
+        logger.info(
+            "Switched conversation branch",
+            conversation_id=conversation_id,
+            new_branch_id=new_branch_id
+        )
+
+        return {
+            "active_branch_id": new_branch_id,
+            "messages": [m.model_dump() for m in messages],
+            "status": "branch_switched"
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to switch branch",
+            conversation_id=conversation_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to switch branch: {str(e)}"
+        )
+
+
+@router.get("/conversations/{conversation_id}/messages/{message_id}/branches", summary="Get branches at message")
+async def get_branches_at_message(
+    conversation_id: str,
+    message_id: str
+) -> Dict[str, Any]:
+    """
+    Get information about all branches at a specific message point.
+
+    This shows how many sibling branches exist and provides navigation info
+    for the < 1/3 > style branch selector UI.
+
+    Args:
+        conversation_id: UUID of the conversation
+        message_id: UUID of the message
+
+    Returns:
+        Branch information including count and previews
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+
+        store = get_conversation_store()
+
+        branch_info = await store.get_branches_at_message(
+            conv_id=conversation_id,
+            message_id=message_id
+        )
+
+        return branch_info.model_dump()
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to get branches",
+            conversation_id=conversation_id,
+            message_id=message_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get branches: {str(e)}"
+        )
+
+
+@router.delete("/conversations/{conversation_id}/branches/{branch_id}", summary="Delete a branch")
+async def delete_branch(
+    conversation_id: str,
+    branch_id: str
+) -> Dict[str, Any]:
+    """
+    Delete a specific branch and all its messages.
+
+    If the deleted branch was active, switches back to the main branch.
+
+    Args:
+        conversation_id: UUID of the conversation
+        branch_id: UUID of the branch to delete
+
+    Returns:
+        Success message
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+
+        store = get_conversation_store()
+
+        success = await store.delete_branch(
+            conv_id=conversation_id,
+            branch_id=branch_id
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Branch {branch_id} not found"
+            )
+
+        logger.info(
+            "Deleted conversation branch",
+            conversation_id=conversation_id,
+            branch_id=branch_id
+        )
+
+        return {
+            "message": f"Branch {branch_id} deleted successfully",
+            "status": "deleted"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to delete branch",
+            conversation_id=conversation_id,
+            branch_id=branch_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete branch: {str(e)}"
         )
