@@ -46,20 +46,20 @@ export interface Message {
   content: string;
   sources?: Source[];
   timestamp: string;
-  // Branching fields
-  parent_message_id?: string | null;
-  branch_id?: string | null;
-  branch_index?: number;
-  // Computed UI fields
-  has_branches?: boolean;
-  sibling_count?: number;
-  sibling_index?: number;
+  // Thread-based branching fields
+  thread_id: number;        // Thread this message belongs to (0 = original)
+  position: number;         // Position within the thread (1-indexed)
+  // Version navigation fields (computed by backend)
+  has_other_versions?: boolean;  // True if other threads have messages at this position
+  version_count?: number;        // Total number of versions at this position
+  current_version?: number;      // Which version this is (1-indexed for UI)
 }
 
 export interface QuestionRequest {
   question: string;
   include_sources?: boolean;
   conversation_id?: string;
+  skip_user_message?: boolean;  // Skip saving user message (used when message already saved from edit)
 }
 
 export interface QuestionResponse {
@@ -97,26 +97,29 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   message_count: number;
-  active_branch_id?: string | null;
+  // Thread-based branching
+  active_thread_id: number;  // Currently active thread (0 = original)
+  max_thread_id: number;     // Highest thread ID created
 }
 
 export interface ConversationWithMessages extends Conversation {
   messages: Message[];
 }
 
-// Branch info types
-export interface BranchInfo {
-  message_id: string;
-  branch_count: number;
-  branches: BranchDetail[];
+// Thread version info types (for navigation UI)
+export interface ThreadVersionInfo {
+  position: number;           // The message position
+  version_count: number;      // Total versions at this position
+  current_thread_id: number;  // Currently active thread
+  versions: ThreadVersion[];  // All versions at this position
 }
 
-export interface BranchDetail {
-  branch_id: string | null;
-  branch_index: number;
+export interface ThreadVersion {
+  thread_id: number;
   message_id: string;
-  first_message_preview: string;
+  content_preview: string;    // First 100 chars of content
   timestamp: string;
+  is_active: boolean;         // True if this is the active thread version
 }
 
 // Knowledge Base types
@@ -173,6 +176,43 @@ export interface UserSettings {
   relevanceThreshold: number;
   voiceEnabled: boolean;
   autoSpeak: boolean;
+}
+
+// Content Generation types (Twitter/X + Blog Posts)
+export type ContentFormat = 'twitter' | 'blog';
+export type ContentStyle = 'academic' | 'casual' | 'narrative';
+
+export interface ContentGenerationRequest {
+  conversation_id: string;
+  format: ContentFormat;
+  style?: ContentStyle;
+  max_tweets?: number;      // Only for twitter format
+  include_toc?: boolean;    // Only for blog format
+  custom_prompt?: string;   // Custom instructions to steer the output
+}
+
+export interface Tweet {
+  position: number;
+  content: string;
+  char_count: number;
+  has_citation: boolean;
+  citation_url?: string;
+}
+
+export interface BlogPost {
+  title: string;
+  content: string;
+  word_count: number;
+  references: string[];
+}
+
+export interface ContentGenerationResponse {
+  format: ContentFormat;
+  style: ContentStyle;
+  tweets?: Tweet[];
+  blog_post?: BlogPost;
+  papers_cited: string[];
+  generation_time_ms: number;
 }
 
 // Proactive Research Insights types

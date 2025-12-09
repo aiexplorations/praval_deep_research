@@ -2,7 +2,14 @@
 SQLAlchemy models for chat history storage.
 
 Defines database schema for conversations and messages with support
-for branched conversations (edit & resubmit like ChatGPT/Claude).
+for branched conversations using a thread-based model.
+
+Thread-based branching:
+- Each message belongs to a thread_id (integer, starting at 0)
+- Thread 0 is the default/original conversation flow
+- When user edits a message, a new thread is created
+- The new thread copies all messages up to the edit point, then continues independently
+- Each thread is a complete, linear conversation path
 """
 
 import uuid
@@ -21,9 +28,9 @@ class Conversation(Base):
     """
     Conversation model - represents a chat session.
 
-    A conversation contains multiple messages organized in a tree structure
-    to support branching (edit & resubmit). The active_branch_id tracks
-    which branch is currently being displayed.
+    A conversation contains multiple threads, where each thread is a complete
+    linear conversation path. The active_thread_id tracks which thread is
+    currently being displayed.
     """
     __tablename__ = "conversations"
 
@@ -52,47 +59,62 @@ class Conversation(Base):
         default=0,
         nullable=False
     )
-    # Track the currently active branch (null = main branch)
-    active_branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        nullable=True,
-        default=None
+    # Currently active thread (0 = original conversation)
+    active_thread_id: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    # Highest thread number created (for generating next thread_id)
+    max_thread_id: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
     )
 
     # Relationship to messages (one-to-many)
     messages: Mapped[List["Message"]] = relationship(
         "Message",
         back_populates="conversation",
-        cascade="all, delete-orphan",  # Delete messages when conversation is deleted
-        order_by="Message.timestamp"
+        cascade="all, delete-orphan",
+        order_by="Message.position"
     )
 
     # Constraints
     __table_args__ = (
         CheckConstraint("char_length(title) > 0", name="conversations_title_not_empty"),
+        CheckConstraint("active_thread_id >= 0", name="conversations_active_thread_non_negative"),
+        CheckConstraint("max_thread_id >= 0", name="conversations_max_thread_non_negative"),
     )
 
     def __repr__(self) -> str:
-        return f"<Conversation(id={self.id}, title='{self.title[:30]}...', messages={self.message_count})>"
+        return f"<Conversation(id={self.id}, title='{self.title[:30]}...', threads={self.max_thread_id + 1})>"
 
 
 class Message(Base):
     """
-    Message model - represents a single message in a conversation.
+    Message model - represents a single message in a conversation thread.
 
-    Messages form a tree structure to support branching:
-    - parent_message_id: Points to the message this is a response/edit of
-    - branch_id: Groups messages into branches (UUID, null = main branch)
-    - branch_index: Position within sibling branches (for < > navigation)
+    Thread-based branching model:
+    - thread_id: Which thread this message belongs to (0 = original)
+    - position: Position within the thread (1-indexed for clarity)
 
-    Example tree structure:
-        User: "What is ML?"           (parent=null, branch=null)
-        └─ Assistant: "ML is..."      (parent=msg1, branch=null)
-           └─ User: "Tell me more"    (parent=msg2, branch=null)  [EDITED]
-              ├─ [Branch 0] User: "Tell me more about neural networks"
-              │   └─ Assistant: "Neural networks..."
-              └─ [Branch 1] User: "Tell me more about decision trees"
-                  └─ Assistant: "Decision trees..."
+    Example:
+        Thread 0 (original):
+            pos=1: User: "What is ML?"
+            pos=2: Assistant: "ML is..."
+            pos=3: User: "Tell me more"     <- User edits this
+            pos=4: Assistant: "Here's more..."
+
+        Thread 1 (created from edit at pos=3):
+            pos=1: User: "What is ML?"      (copied from thread 0)
+            pos=2: Assistant: "ML is..."    (copied from thread 0)
+            pos=3: User: "Explain neural networks"  (edited version)
+            pos=4: Assistant: "Neural networks..."  (new response)
+
+    To find versions of a message at position N:
+        SELECT * FROM messages WHERE conversation_id=? AND position=N
+        GROUP BY thread_id
     """
     __tablename__ = "messages"
 
@@ -128,24 +150,16 @@ class Message(Base):
         nullable=False
     )
 
-    # === Branching Support ===
-    # Parent message (for tree structure)
-    parent_message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("messages.id", ondelete="SET NULL"),
-        nullable=True,
-        default=None
-    )
-    # Branch identifier (UUID, messages with same branch_id are in same branch)
-    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        nullable=True,
-        default=None
-    )
-    # Index among sibling branches (0 = original, 1 = first edit, etc.)
-    branch_index: Mapped[int] = mapped_column(
+    # === Thread-based Branching ===
+    # Thread identifier (0 = original conversation, 1+ = branches)
+    thread_id: Mapped[int] = mapped_column(
         Integer,
         default=0,
+        nullable=False
+    )
+    # Position within the thread (1-indexed)
+    position: Mapped[int] = mapped_column(
+        Integer,
         nullable=False
     )
 
@@ -155,22 +169,17 @@ class Message(Base):
         back_populates="messages"
     )
 
-    # Self-referential relationship for parent/children
-    parent: Mapped[Optional["Message"]] = relationship(
-        "Message",
-        remote_side="Message.id",
-        foreign_keys=[parent_message_id],
-        backref="children"
-    )
-
     # Constraints and indexes
     __table_args__ = (
         CheckConstraint("role IN ('user', 'assistant')", name="messages_role_check"),
         CheckConstraint("char_length(content) > 0", name="messages_content_not_empty"),
-        Index("ix_messages_conversation_branch", "conversation_id", "branch_id"),
-        Index("ix_messages_parent", "parent_message_id"),
+        CheckConstraint("thread_id >= 0", name="messages_thread_non_negative"),
+        CheckConstraint("position > 0", name="messages_position_positive"),
+        # Index for loading a thread efficiently
+        Index("ix_messages_conversation_thread", "conversation_id", "thread_id", "position"),
+        # Index for finding all versions at a position
+        Index("ix_messages_conversation_position", "conversation_id", "position"),
     )
 
     def __repr__(self) -> str:
-        branch_info = f", branch={self.branch_id}" if self.branch_id else ""
-        return f"<Message(id={self.id}, role='{self.role}'{branch_info}, content='{self.content[:30]}...')>"
+        return f"<Message(id={self.id}, thread={self.thread_id}, pos={self.position}, role='{self.role}')>"

@@ -1,17 +1,18 @@
 """
 PostgreSQL-based conversation storage for chat history.
 
-Drop-in replacement for Redis-based conversation storage,
-using PostgreSQL for persistent, relational data storage.
-
-Supports branched conversations (edit & resubmit like ChatGPT/Claude).
+Uses a thread-based model for branching:
+- Each message belongs to a thread_id (0 = original conversation)
+- When user edits a message, a new thread is created
+- The new thread copies all prior messages and continues independently
+- Each thread is a complete, linear conversation path
 """
 
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
-from sqlalchemy import select, update, delete, func, desc, and_, or_
+from sqlalchemy import select, update, delete, func, desc, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
@@ -19,75 +20,57 @@ from ..db.base import get_session_maker
 from ..db.models import Conversation as ConversationModel, Message as MessageModel
 
 
-# Reuse Pydantic models from Redis implementation for API compatibility
+# Pydantic models for API responses
 class MessageDict(BaseModel):
-    """Message data structure with branching support."""
+    """Message data structure with thread info."""
     id: str
     role: str  # 'user' or 'assistant'
     content: str
     sources: Optional[list] = None
     timestamp: str
-    # Branching fields
-    parent_message_id: Optional[str] = None
-    branch_id: Optional[str] = None
-    branch_index: int = 0
-    # Computed fields for UI
-    has_branches: bool = False
-    sibling_count: int = 1
-    sibling_index: int = 0
+    # Thread-based branching
+    thread_id: int = 0
+    position: int
+    # Computed UI fields for branch navigation
+    has_other_versions: bool = False  # True if other threads have a message at this position
+    version_count: int = 1  # Total versions at this position
+    current_version: int = 1  # Which version this is (1-indexed for display)
 
 
 class ConversationDict(BaseModel):
-    """Conversation metadata with branching support."""
+    """Conversation metadata."""
     id: str
     title: str
     created_at: str
     updated_at: str
-    message_count: int = 0
-    active_branch_id: Optional[str] = None
+    message_count: int
+    active_thread_id: int = 0
+    max_thread_id: int = 0
 
 
-class BranchInfo(BaseModel):
-    """Information about a branch point in the conversation."""
-    message_id: str
-    branch_count: int
-    branches: List[dict]  # [{branch_id, branch_index, first_message_preview}]
+class ThreadInfo(BaseModel):
+    """Information about threads at a message position."""
+    position: int
+    thread_count: int
+    threads: List[Dict[str, Any]]
 
 
 class PostgreSQLConversationStore:
-    """
-    PostgreSQL-based conversation storage with branching support.
-
-    Implements the same interface as Redis ConversationStore for
-    drop-in replacement with better data integrity and query flexibility.
-
-    Branching model:
-    - Messages form a tree structure via parent_message_id
-    - branch_id groups messages in the same branch
-    - branch_index orders sibling branches (for < > navigation)
-    - Conversations track active_branch_id for current view
-    """
+    """PostgreSQL-backed conversation storage with thread-based branching."""
 
     def __init__(self):
-        """Initialize with session maker."""
         self.session_maker = get_session_maker()
 
-    async def create_conversation(
-        self, title: Optional[str] = None, conversation_id: Optional[str] = None
-    ) -> ConversationDict:
-        """Create a new conversation with optional specific ID."""
+    async def create_conversation(self, title: str) -> ConversationDict:
+        """Create a new conversation."""
         async with self.session_maker() as session:
-            conv_id = uuid.UUID(conversation_id) if conversation_id else uuid.uuid4()
-            now = datetime.utcnow()
-
             conversation = ConversationModel(
-                id=conv_id,
-                title=title or f"Chat {now.strftime('%Y-%m-%d')}",
-                created_at=now,
-                updated_at=now,
+                id=uuid.uuid4(),
+                title=title,
                 message_count=0,
+                active_thread_id=0,
+                max_thread_id=0,
             )
-
             session.add(conversation)
             await session.commit()
             await session.refresh(conversation)
@@ -97,8 +80,9 @@ class PostgreSQLConversationStore:
                 title=conversation.title,
                 created_at=conversation.created_at.isoformat(),
                 updated_at=conversation.updated_at.isoformat(),
-                message_count=conversation.message_count,
-                active_branch_id=None,
+                message_count=0,
+                active_thread_id=0,
+                max_thread_id=0,
             )
 
     async def get_conversation(self, conv_id: str) -> Optional[ConversationDict]:
@@ -118,7 +102,8 @@ class PostgreSQLConversationStore:
                 created_at=conversation.created_at.isoformat(),
                 updated_at=conversation.updated_at.isoformat(),
                 message_count=conversation.message_count,
-                active_branch_id=str(conversation.active_branch_id) if conversation.active_branch_id else None,
+                active_thread_id=conversation.active_thread_id,
+                max_thread_id=conversation.max_thread_id,
             )
 
     async def list_conversations(
@@ -141,7 +126,8 @@ class PostgreSQLConversationStore:
                     created_at=conv.created_at.isoformat(),
                     updated_at=conv.updated_at.isoformat(),
                     message_count=conv.message_count,
-                    active_branch_id=str(conv.active_branch_id) if conv.active_branch_id else None,
+                    active_thread_id=conv.active_thread_id,
+                    max_thread_id=conv.max_thread_id,
                 )
                 for conv in conversations
             ]
@@ -161,23 +147,43 @@ class PostgreSQLConversationStore:
         role: str,
         content: str,
         sources: Optional[list] = None,
-        parent_message_id: Optional[str] = None,
-        branch_id: Optional[str] = None,
-        branch_index: int = 0
+        thread_id: Optional[int] = None,
+        position: Optional[int] = None
     ) -> MessageDict:
         """
-        Add a message to a conversation.
+        Add a message to a conversation thread.
 
         Args:
             conv_id: Conversation ID
             role: 'user' or 'assistant'
             content: Message content
             sources: Optional list of source citations
-            parent_message_id: ID of parent message (for branching)
-            branch_id: Branch identifier (for grouping branch messages)
-            branch_index: Index among sibling branches
+            thread_id: Thread to add to (None = active thread, 0 = original)
+            position: Position in thread (auto-calculated if not provided)
         """
         async with self.session_maker() as session:
+            # If thread_id not provided, use the conversation's active thread
+            if thread_id is None:
+                conv_result = await session.execute(
+                    select(ConversationModel.active_thread_id)
+                    .where(ConversationModel.id == uuid.UUID(conv_id))
+                )
+                thread_id = conv_result.scalar() or 0
+
+            # If position not provided, calculate next position in thread
+            if position is None:
+                result = await session.execute(
+                    select(func.max(MessageModel.position))
+                    .where(
+                        and_(
+                            MessageModel.conversation_id == uuid.UUID(conv_id),
+                            MessageModel.thread_id == thread_id
+                        )
+                    )
+                )
+                max_position = result.scalar() or 0
+                position = max_position + 1
+
             message = MessageModel(
                 id=uuid.uuid4(),
                 conversation_id=uuid.UUID(conv_id),
@@ -185,9 +191,8 @@ class PostgreSQLConversationStore:
                 content=content,
                 sources=sources or [],
                 timestamp=datetime.utcnow(),
-                parent_message_id=uuid.UUID(parent_message_id) if parent_message_id else None,
-                branch_id=uuid.UUID(branch_id) if branch_id else None,
-                branch_index=branch_index,
+                thread_id=thread_id,
+                position=position,
             )
 
             session.add(message)
@@ -197,8 +202,8 @@ class PostgreSQLConversationStore:
                 update(ConversationModel)
                 .where(ConversationModel.id == uuid.UUID(conv_id))
                 .values(
-                    updated_at=datetime.utcnow(),
                     message_count=ConversationModel.message_count + 1,
+                    updated_at=datetime.utcnow()
                 )
             )
 
@@ -211,134 +216,109 @@ class PostgreSQLConversationStore:
                 content=message.content,
                 sources=message.sources,
                 timestamp=message.timestamp.isoformat(),
-                parent_message_id=str(message.parent_message_id) if message.parent_message_id else None,
-                branch_id=str(message.branch_id) if message.branch_id else None,
-                branch_index=message.branch_index,
+                thread_id=message.thread_id,
+                position=message.position,
+                has_other_versions=False,
+                version_count=1,
+                current_version=1,
             )
 
     async def get_messages(
-        self, conv_id: str, limit: Optional[int] = None, branch_id: Optional[str] = None
+        self,
+        conv_id: str,
+        thread_id: Optional[int] = None,
+        limit: Optional[int] = None
     ) -> List[MessageDict]:
         """
-        Get messages in a conversation, optionally filtered by branch.
+        Get messages for a conversation thread.
 
-        For branched conversations, this returns messages following the active branch path.
+        If thread_id is None, uses the conversation's active_thread_id.
+        Also computes version info for each message position.
+
+        Args:
+            conv_id: Conversation ID
+            thread_id: Specific thread to load (None = active thread)
+            limit: Optional limit on messages
+
+        Returns:
+            List of messages with version navigation info
         """
         async with self.session_maker() as session:
-            # Get conversation to check active branch
+            # Get conversation to find active thread
             conv_result = await session.execute(
                 select(ConversationModel).where(ConversationModel.id == uuid.UUID(conv_id))
             )
             conversation = conv_result.scalar_one_or_none()
 
-            # Use provided branch_id or conversation's active branch
-            active_branch = uuid.UUID(branch_id) if branch_id else (
-                conversation.active_branch_id if conversation else None
-            )
+            if not conversation:
+                return []
 
-            # Build query - get messages in the active branch path
+            # Use provided thread_id or conversation's active thread
+            active_thread = thread_id if thread_id is not None else conversation.active_thread_id
+
+            # Get messages for this thread
             query = (
                 select(MessageModel)
-                .where(MessageModel.conversation_id == uuid.UUID(conv_id))
-                .order_by(MessageModel.timestamp)
+                .where(
+                    and_(
+                        MessageModel.conversation_id == uuid.UUID(conv_id),
+                        MessageModel.thread_id == active_thread
+                    )
+                )
+                .order_by(MessageModel.position)
             )
 
             if limit:
                 query = query.limit(limit)
 
             result = await session.execute(query)
-            all_messages = result.scalars().all()
+            thread_messages = result.scalars().all()
 
-            # Group messages by their parent_message_id to find siblings
-            # Siblings share the same parent and are alternatives at the same conversation point
-            siblings_by_parent = {}
-            for msg in all_messages:
-                # Use parent_message_id as key, None for root messages
-                key = msg.parent_message_id
-                if key not in siblings_by_parent:
-                    siblings_by_parent[key] = []
-                siblings_by_parent[key].append(msg)
-
-            # For root-level messages (parent=None), we need special handling:
-            # Only the first user message and its edits should be considered siblings
-            root_siblings = siblings_by_parent.get(None, [])
-            user_root_msgs = [m for m in root_siblings if m.role == 'user']
-
-            # Find the first user message (chronologically) and messages that are edits
-            first_user_msg = None
-            valid_first_siblings = []
-            if user_root_msgs:
-                # Find the first user message (with branch_id=NULL and branch_index=0)
-                original_msgs = [m for m in user_root_msgs if m.branch_id is None and m.branch_index == 0]
-                if original_msgs:
-                    first_user_msg = min(original_msgs, key=lambda m: m.timestamp)
-                    # Siblings are: original first message + any with branch_id set
-                    valid_first_siblings = [m for m in user_root_msgs if (
-                        m.id == first_user_msg.id or m.branch_id is not None
-                    )]
-
-            def get_sibling_info(msg):
-                """Get sibling count and index for a message."""
-                if msg.parent_message_id:
-                    # Non-root message - use parent_message_id to find siblings
-                    siblings = [
-                        s for s in siblings_by_parent.get(msg.parent_message_id, [])
-                        if s.role == msg.role
-                    ]
-                elif msg.role == 'user':
-                    # Root-level user message - special handling
-                    # Only the FIRST user message has potential siblings (edits)
-                    # Other root-level user messages are different conversation turns
-                    if first_user_msg and (msg.id == first_user_msg.id or msg.branch_id is not None):
-                        # This is the first message or an edit of it
-                        siblings = valid_first_siblings
-                    else:
-                        # This is a subsequent user message at root level - no siblings
-                        siblings = [msg]
-                else:
-                    # Root-level assistant message - typically no siblings
-                    siblings = [msg]
-
-                siblings = sorted(siblings, key=lambda s: s.branch_index)
-                sibling_count = len(siblings)
-                sibling_index = next(
-                    (i for i, s in enumerate(siblings) if s.id == msg.id),
-                    0
+            # Get all messages at each position across all threads (for version counting)
+            positions = [msg.position for msg in thread_messages]
+            if positions:
+                version_result = await session.execute(
+                    select(MessageModel.position, MessageModel.thread_id)
+                    .where(
+                        and_(
+                            MessageModel.conversation_id == uuid.UUID(conv_id),
+                            MessageModel.position.in_(positions)
+                        )
+                    )
                 )
-                has_branches = sibling_count > 1
-                return has_branches, sibling_count, sibling_index
+                all_versions = version_result.all()
 
-            # Filter to active branch path if we have branches
-            if active_branch:
-                # Get messages that are either:
-                # 1. In the main branch (branch_id is None) before the branch point
-                # 2. In the active branch
-                filtered_messages = [
-                    msg for msg in all_messages
-                    if msg.branch_id is None or msg.branch_id == active_branch
-                ]
+                # Count versions per position
+                version_counts = {}
+                threads_at_position = {}
+                for pos, tid in all_versions:
+                    if pos not in version_counts:
+                        version_counts[pos] = 0
+                        threads_at_position[pos] = []
+                    version_counts[pos] += 1
+                    threads_at_position[pos].append(tid)
             else:
-                # No active branch - show main branch (branch_id is None or branch_index 0)
-                filtered_messages = [
-                    msg for msg in all_messages
-                    if msg.branch_id is None or msg.branch_index == 0
-                ]
+                version_counts = {}
+                threads_at_position = {}
 
+            # Build result with version info
             result_messages = []
-            for msg in filtered_messages:
-                has_branches, sibling_count, sibling_index = get_sibling_info(msg)
+            for msg in thread_messages:
+                threads = sorted(threads_at_position.get(msg.position, [msg.thread_id]))
+                version_count = version_counts.get(msg.position, 1)
+                current_version = threads.index(msg.thread_id) + 1 if msg.thread_id in threads else 1
+
                 result_messages.append(MessageDict(
                     id=str(msg.id),
                     role=msg.role,
                     content=msg.content,
                     sources=msg.sources,
                     timestamp=msg.timestamp.isoformat(),
-                    parent_message_id=str(msg.parent_message_id) if msg.parent_message_id else None,
-                    branch_id=str(msg.branch_id) if msg.branch_id else None,
-                    branch_index=msg.branch_index,
-                    has_branches=has_branches,
-                    sibling_count=sibling_count,
-                    sibling_index=sibling_index,
+                    thread_id=msg.thread_id,
+                    position=msg.position,
+                    has_other_versions=version_count > 1,
+                    version_count=version_count,
+                    current_version=current_version,
                 ))
 
             return result_messages
@@ -354,19 +334,21 @@ class PostgreSQLConversationStore:
             await session.commit()
             return result.rowcount > 0
 
-    # ========== Branching Operations ==========
+    # ========== Thread-based Branching Operations ==========
 
     async def edit_message(
         self,
         conv_id: str,
         message_id: str,
         new_content: str
-    ) -> MessageDict:
+    ) -> Dict[str, Any]:
         """
-        Edit a message by creating a new branch.
+        Edit a message by creating a new thread.
 
-        This creates a new user message as a sibling branch to the original,
-        preserving the conversation history. The new branch becomes active.
+        This creates a new thread that:
+        1. Copies all messages from position 1 to position-1 from the source thread
+        2. Adds the edited message at the original position
+        3. Sets this new thread as active
 
         Args:
             conv_id: Conversation ID
@@ -374,7 +356,7 @@ class PostgreSQLConversationStore:
             new_content: The edited message content
 
         Returns:
-            The newly created message in the new branch
+            Dict with new_thread_id, new_message, and position info
         """
         async with self.session_maker() as session:
             # Get the original message
@@ -389,355 +371,309 @@ class PostgreSQLConversationStore:
             if original_msg.role != "user":
                 raise ValueError("Can only edit user messages")
 
-            # Find siblings (messages with the same parent)
-            parent_id = original_msg.parent_message_id
-            sibling_result = await session.execute(
-                select(MessageModel).where(
+            # Get conversation to get max_thread_id
+            conv_result = await session.execute(
+                select(ConversationModel).where(ConversationModel.id == uuid.UUID(conv_id))
+            )
+            conversation = conv_result.scalar_one_or_none()
+
+            if not conversation:
+                raise ValueError(f"Conversation {conv_id} not found")
+
+            # Create new thread ID
+            new_thread_id = conversation.max_thread_id + 1
+            source_thread = original_msg.thread_id
+            edit_position = original_msg.position
+
+            # Copy all messages from source thread up to (but not including) edit position
+            messages_result = await session.execute(
+                select(MessageModel)
+                .where(
                     and_(
                         MessageModel.conversation_id == uuid.UUID(conv_id),
-                        MessageModel.parent_message_id == parent_id if parent_id else MessageModel.parent_message_id.is_(None),
-                        MessageModel.role == "user"
+                        MessageModel.thread_id == source_thread,
+                        MessageModel.position < edit_position
                     )
                 )
+                .order_by(MessageModel.position)
             )
-            siblings = sibling_result.scalars().all()
+            messages_to_copy = messages_result.scalars().all()
 
-            # Calculate new branch index
-            max_branch_index = max((s.branch_index for s in siblings), default=-1)
-            new_branch_index = max_branch_index + 1
+            # Create copies in new thread
+            for msg in messages_to_copy:
+                new_msg = MessageModel(
+                    id=uuid.uuid4(),
+                    conversation_id=uuid.UUID(conv_id),
+                    role=msg.role,
+                    content=msg.content,
+                    sources=msg.sources,
+                    timestamp=msg.timestamp,  # Preserve original timestamp
+                    thread_id=new_thread_id,
+                    position=msg.position,
+                )
+                session.add(new_msg)
 
-            # Create new branch ID
-            new_branch_id = uuid.uuid4()
-
-            # Create the edited message as a new branch
-            new_message = MessageModel(
+            # Add the edited message at the edit position
+            edited_message = MessageModel(
                 id=uuid.uuid4(),
                 conversation_id=uuid.UUID(conv_id),
                 role="user",
                 content=new_content,
                 sources=[],
                 timestamp=datetime.utcnow(),
-                parent_message_id=parent_id,
-                branch_id=new_branch_id,
-                branch_index=new_branch_index,
+                thread_id=new_thread_id,
+                position=edit_position,
             )
+            session.add(edited_message)
 
-            session.add(new_message)
-
-            # Update conversation to use new branch and update timestamp
+            # Update conversation: set active thread and increment max_thread_id
             await session.execute(
                 update(ConversationModel)
                 .where(ConversationModel.id == uuid.UUID(conv_id))
                 .values(
-                    active_branch_id=new_branch_id,
+                    active_thread_id=new_thread_id,
+                    max_thread_id=new_thread_id,
+                    message_count=ConversationModel.message_count + len(messages_to_copy) + 1,
                     updated_at=datetime.utcnow(),
-                    message_count=ConversationModel.message_count + 1,
                 )
             )
 
             await session.commit()
-            await session.refresh(new_message)
+            await session.refresh(edited_message)
 
-            return MessageDict(
-                id=str(new_message.id),
-                role=new_message.role,
-                content=new_message.content,
-                sources=new_message.sources,
-                timestamp=new_message.timestamp.isoformat(),
-                parent_message_id=str(new_message.parent_message_id) if new_message.parent_message_id else None,
-                branch_id=str(new_message.branch_id),
-                branch_index=new_message.branch_index,
-                has_branches=False,
-                sibling_count=new_branch_index + 1,
-                sibling_index=new_branch_index,
+            # Count versions at this position (now includes the new one)
+            version_result = await session.execute(
+                select(func.count(MessageModel.id))
+                .where(
+                    and_(
+                        MessageModel.conversation_id == uuid.UUID(conv_id),
+                        MessageModel.position == edit_position
+                    )
+                )
             )
+            version_count = version_result.scalar() or 1
 
-    async def switch_branch(
+            return {
+                "new_thread_id": new_thread_id,
+                "new_message": MessageDict(
+                    id=str(edited_message.id),
+                    role=edited_message.role,
+                    content=edited_message.content,
+                    sources=edited_message.sources,
+                    timestamp=edited_message.timestamp.isoformat(),
+                    thread_id=new_thread_id,
+                    position=edit_position,
+                    has_other_versions=True,
+                    version_count=version_count,
+                    current_version=version_count,  # New version is always latest
+                ),
+                "position": edit_position,
+                "source_thread_id": source_thread,
+                "copied_messages": len(messages_to_copy),
+            }
+
+    async def switch_thread(
         self,
         conv_id: str,
-        branch_id: Optional[str] = None,
-        message_id: Optional[str] = None,
+        thread_id: Optional[int] = None,
+        position: Optional[int] = None,
         direction: Optional[str] = None
-    ) -> Optional[str]:
+    ) -> Dict[str, Any]:
         """
-        Switch to a different branch in the conversation.
+        Switch to a different thread.
 
         Can be called in two ways:
-        1. With branch_id: Switch directly to that branch
-        2. With message_id and direction: Navigate left/right among sibling branches
+        1. With thread_id: Switch directly to that thread
+        2. With position and direction: Navigate to prev/next thread at that position
 
         Args:
             conv_id: Conversation ID
-            branch_id: Direct branch ID to switch to
-            message_id: Message ID to navigate from (for direction-based switching)
-            direction: 'left' or 'right' for sibling navigation
+            thread_id: Direct thread ID to switch to
+            position: Message position for direction-based navigation
+            direction: 'prev' or 'next' for navigating between threads at a position
 
         Returns:
-            The new active branch_id, or None if switching to main branch
+            Dict with new active_thread_id and messages
         """
         async with self.session_maker() as session:
-            new_branch_id = None
+            new_thread_id = None
 
-            if branch_id:
-                # Direct branch switch
-                new_branch_id = uuid.UUID(branch_id)
+            if thread_id is not None:
+                # Direct switch
+                new_thread_id = thread_id
 
-            elif message_id and direction:
-                # Navigate among siblings
-                result = await session.execute(
-                    select(MessageModel).where(MessageModel.id == uuid.UUID(message_id))
+            elif position is not None and direction:
+                # Navigate between threads at a position
+                # Get current active thread
+                conv_result = await session.execute(
+                    select(ConversationModel).where(ConversationModel.id == uuid.UUID(conv_id))
                 )
-                current_msg = result.scalar_one_or_none()
+                conversation = conv_result.scalar_one_or_none()
+                if not conversation:
+                    raise ValueError(f"Conversation {conv_id} not found")
 
-                if not current_msg:
-                    raise ValueError(f"Message {message_id} not found")
+                current_thread = conversation.active_thread_id
 
-                # Find siblings
-                parent_id = current_msg.parent_message_id
-                sibling_result = await session.execute(
-                    select(MessageModel)
+                # Get all threads that have a message at this position
+                threads_result = await session.execute(
+                    select(MessageModel.thread_id)
                     .where(
                         and_(
                             MessageModel.conversation_id == uuid.UUID(conv_id),
-                            MessageModel.parent_message_id == parent_id if parent_id else MessageModel.parent_message_id.is_(None),
-                            MessageModel.role == current_msg.role
+                            MessageModel.position == position
                         )
                     )
-                    .order_by(MessageModel.branch_index)
+                    .distinct()
+                    .order_by(MessageModel.thread_id)
                 )
-                siblings = sibling_result.scalars().all()
+                threads = [t[0] for t in threads_result.all()]
 
-                if len(siblings) <= 1:
-                    return None  # No siblings to navigate to
+                if len(threads) <= 1:
+                    # No other threads at this position
+                    return {
+                        "active_thread_id": current_thread,
+                        "messages": await self.get_messages(conv_id, current_thread),
+                        "status": "no_change"
+                    }
 
-                # Find current position
-                current_index = next(
-                    (i for i, s in enumerate(siblings) if s.id == current_msg.id),
-                    0
-                )
+                # Find current position in list
+                try:
+                    current_idx = threads.index(current_thread)
+                except ValueError:
+                    current_idx = 0
 
-                # Calculate target index
-                if direction == "left":
-                    target_index = max(0, current_index - 1)
-                else:  # right
-                    target_index = min(len(siblings) - 1, current_index + 1)
+                # Calculate target
+                if direction == "prev":
+                    target_idx = max(0, current_idx - 1)
+                else:  # next
+                    target_idx = min(len(threads) - 1, current_idx + 1)
 
-                if target_index == current_index:
-                    return str(current_msg.branch_id) if current_msg.branch_id else None
+                new_thread_id = threads[target_idx]
 
-                target_msg = siblings[target_index]
-                new_branch_id = target_msg.branch_id
+            if new_thread_id is None:
+                raise ValueError("Must provide either thread_id or (position + direction)")
 
-            # Update conversation's active branch
+            # Update conversation's active thread
             await session.execute(
                 update(ConversationModel)
                 .where(ConversationModel.id == uuid.UUID(conv_id))
                 .values(
-                    active_branch_id=new_branch_id,
+                    active_thread_id=new_thread_id,
                     updated_at=datetime.utcnow()
                 )
             )
             await session.commit()
 
-            return str(new_branch_id) if new_branch_id else None
+            # Return new thread's messages
+            messages = await self.get_messages(conv_id, new_thread_id)
 
-    async def get_branches_at_message(
+            return {
+                "active_thread_id": new_thread_id,
+                "messages": [m.model_dump() for m in messages],
+                "status": "thread_switched"
+            }
+
+    async def get_threads_at_position(
         self,
         conv_id: str,
-        message_id: str
-    ) -> BranchInfo:
+        position: int
+    ) -> ThreadInfo:
         """
-        Get information about all branches that stem from a message's parent.
+        Get information about all threads that have a message at a given position.
 
-        This is used to show branch navigation UI (< 1/3 >) for a message.
-
-        For messages at the root level (parent_message_id=NULL), we only consider
-        messages as siblings if they are either:
-        1. The original first message (branch_id=NULL, branch_index=0)
-        2. Explicit edits of the first message (branch_id is set)
+        Useful for showing "< 1/3 >" navigation at messages with multiple versions.
 
         Args:
             conv_id: Conversation ID
-            message_id: Message ID to get branch info for
+            position: Message position to query
 
         Returns:
-            BranchInfo with count and details of all sibling branches
+            ThreadInfo with count and details of threads at this position
         """
         async with self.session_maker() as session:
-            # Get the message
+            # Get all messages at this position
             result = await session.execute(
-                select(MessageModel).where(MessageModel.id == uuid.UUID(message_id))
+                select(MessageModel)
+                .where(
+                    and_(
+                        MessageModel.conversation_id == uuid.UUID(conv_id),
+                        MessageModel.position == position
+                    )
+                )
+                .order_by(MessageModel.thread_id)
             )
-            msg = result.scalar_one_or_none()
+            messages = result.scalars().all()
 
-            if not msg:
-                raise ValueError(f"Message {message_id} not found")
-
-            # Find all siblings (messages with same parent and role)
-            parent_id = msg.parent_message_id
-
-            if parent_id:
-                # Message has a parent - find siblings with same parent
-                sibling_result = await session.execute(
-                    select(MessageModel)
-                    .where(
-                        and_(
-                            MessageModel.conversation_id == uuid.UUID(conv_id),
-                            MessageModel.parent_message_id == parent_id,
-                            MessageModel.role == msg.role
-                        )
-                    )
-                    .order_by(MessageModel.branch_index)
-                )
-            else:
-                # Root-level message (parent=NULL)
-                # Only consider as siblings:
-                # 1. Messages at branch_index=0 AND branch_id=NULL (original messages)
-                # 2. Messages with the same branch_id as the queried message (if it has one)
-                # 3. The first user message (chronologically) and its edits
-                #
-                # For now, we'll find all root-level user messages and filter:
-                # - The original (min timestamp, branch_id=NULL)
-                # - Any with branch_id set (explicit edits)
-                sibling_result = await session.execute(
-                    select(MessageModel)
-                    .where(
-                        and_(
-                            MessageModel.conversation_id == uuid.UUID(conv_id),
-                            MessageModel.parent_message_id.is_(None),
-                            MessageModel.role == msg.role,
-                            # Only include messages that are either:
-                            # - branch_index == 0 (could be original)
-                            # - have a branch_id (explicit edit)
-                            or_(
-                                and_(MessageModel.branch_index == 0, MessageModel.branch_id.is_(None)),
-                                MessageModel.branch_id.isnot(None)
-                            )
-                        )
-                    )
-                    .order_by(MessageModel.timestamp)
-                )
-
-            raw_siblings = sibling_result.scalars().all()
-
-            # For root-level messages, we need to identify the "first" message
-            # and only include it along with its edits
-            if not parent_id and msg.role == "user":
-                # Find the first user message (chronologically with branch_index=0, branch_id=NULL)
-                first_msg = next(
-                    (s for s in raw_siblings if s.branch_id is None and s.branch_index == 0),
-                    None
-                )
-                if first_msg:
-                    # Filter to only include:
-                    # - The first message
-                    # - Messages that are edits (have branch_id set) created near the first message
-                    # For simplicity, just include the first message and any with branch_id
-                    first_timestamp = first_msg.timestamp
-                    siblings = [s for s in raw_siblings if (
-                        s.id == first_msg.id or  # The original first message
-                        s.branch_id is not None  # Any explicit edit
-                    )]
-                else:
-                    siblings = raw_siblings
-            else:
-                siblings = raw_siblings
-
-            # Sort by branch_index for consistent ordering
-            siblings = sorted(siblings, key=lambda s: s.branch_index)
-
-            branches = []
-            for sibling in siblings:
-                branches.append({
-                    "branch_id": str(sibling.branch_id) if sibling.branch_id else None,
-                    "branch_index": sibling.branch_index,
-                    "message_id": str(sibling.id),
-                    "first_message_preview": sibling.content[:100] + "..." if len(sibling.content) > 100 else sibling.content,
-                    "timestamp": sibling.timestamp.isoformat()
+            threads = []
+            for msg in messages:
+                threads.append({
+                    "thread_id": msg.thread_id,
+                    "message_id": str(msg.id),
+                    "content_preview": msg.content[:100] + "..." if len(msg.content) > 100 else msg.content,
+                    "timestamp": msg.timestamp.isoformat(),
                 })
 
-            return BranchInfo(
-                message_id=message_id,
-                branch_count=len(branches),
-                branches=branches
+            return ThreadInfo(
+                position=position,
+                thread_count=len(threads),
+                threads=threads,
             )
 
-    async def get_message(self, message_id: str) -> Optional[MessageDict]:
-        """Get a single message by ID."""
-        async with self.session_maker() as session:
-            result = await session.execute(
-                select(MessageModel).where(MessageModel.id == uuid.UUID(message_id))
-            )
-            msg = result.scalar_one_or_none()
-
-            if not msg:
-                return None
-
-            return MessageDict(
-                id=str(msg.id),
-                role=msg.role,
-                content=msg.content,
-                sources=msg.sources,
-                timestamp=msg.timestamp.isoformat(),
-                parent_message_id=str(msg.parent_message_id) if msg.parent_message_id else None,
-                branch_id=str(msg.branch_id) if msg.branch_id else None,
-                branch_index=msg.branch_index,
-            )
-
-    async def delete_branch(self, conv_id: str, branch_id: str) -> bool:
+    async def delete_thread(self, conv_id: str, thread_id: int) -> Dict[str, Any]:
         """
-        Delete all messages in a specific branch.
+        Delete a thread and all its messages.
 
-        This removes the branch and all its messages. If this was the active
-        branch, switches to the main branch.
+        Cannot delete thread 0 (original conversation).
+        If deleting the active thread, switches to thread 0.
 
         Args:
             conv_id: Conversation ID
-            branch_id: Branch ID to delete
+            thread_id: Thread ID to delete
 
         Returns:
-            True if branch was deleted, False if not found
+            Dict with status and new active thread
         """
+        if thread_id == 0:
+            raise ValueError("Cannot delete the original thread (thread 0)")
+
         async with self.session_maker() as session:
-            # Count messages in branch
+            # Count messages to delete
             count_result = await session.execute(
                 select(func.count(MessageModel.id))
                 .where(
                     and_(
                         MessageModel.conversation_id == uuid.UUID(conv_id),
-                        MessageModel.branch_id == uuid.UUID(branch_id)
+                        MessageModel.thread_id == thread_id
                     )
                 )
             )
-            message_count = count_result.scalar()
+            message_count = count_result.scalar() or 0
 
-            if message_count == 0:
-                return False
-
-            # Delete messages in the branch
+            # Delete messages
             await session.execute(
                 delete(MessageModel)
                 .where(
                     and_(
                         MessageModel.conversation_id == uuid.UUID(conv_id),
-                        MessageModel.branch_id == uuid.UUID(branch_id)
+                        MessageModel.thread_id == thread_id
                     )
                 )
             )
 
-            # Get conversation to check if this was the active branch
+            # Check if this was the active thread
             conv_result = await session.execute(
                 select(ConversationModel).where(ConversationModel.id == uuid.UUID(conv_id))
             )
             conversation = conv_result.scalar_one_or_none()
 
-            if conversation and str(conversation.active_branch_id) == branch_id:
-                # Switch back to main branch
+            new_active_thread = 0
+            if conversation and conversation.active_thread_id == thread_id:
+                # Switch to thread 0
                 await session.execute(
                     update(ConversationModel)
                     .where(ConversationModel.id == uuid.UUID(conv_id))
                     .values(
-                        active_branch_id=None,
+                        active_thread_id=0,
                         message_count=ConversationModel.message_count - message_count,
                         updated_at=datetime.utcnow()
                     )
@@ -752,17 +688,24 @@ class PostgreSQLConversationStore:
                         updated_at=datetime.utcnow()
                     )
                 )
+                new_active_thread = conversation.active_thread_id if conversation else 0
 
             await session.commit()
-            return True
+
+            return {
+                "deleted_thread_id": thread_id,
+                "deleted_message_count": message_count,
+                "new_active_thread_id": new_active_thread,
+                "status": "thread_deleted"
+            }
 
 
-# Global instance
+# Global singleton instance
 _pg_conversation_store: Optional[PostgreSQLConversationStore] = None
 
 
 def get_pg_conversation_store() -> PostgreSQLConversationStore:
-    """Get or create the PostgreSQL conversation store instance."""
+    """Get the PostgreSQL conversation store singleton."""
     global _pg_conversation_store
     if _pg_conversation_store is None:
         _pg_conversation_store = PostgreSQLConversationStore()

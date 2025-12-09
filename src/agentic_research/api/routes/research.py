@@ -17,7 +17,9 @@ import structlog
 from ..models.research import (
     ResearchQuery, ResearchResponse, PaperResult,
     QuestionRequest, QuestionResponse, SourceCitation,
-    ErrorResponse
+    ErrorResponse,
+    ContentFormat, ContentStyle, ContentGenerationRequest,
+    ContentGenerationResponse, Tweet, BlogPost
 )
 from agents import (
     paper_discovery_agent,
@@ -582,12 +584,13 @@ Once you've found and indexed some papers on this topic, I'll be able to provide
                     elif conv.message_count == 0:
                         is_first_message = True
 
-                    # Save user message
-                    await store.add_message(
-                        conv_id=request.conversation_id,
-                        role="user",
-                        content=request.question
-                    )
+                    # Save user message (unless it was already saved, e.g., from an edit)
+                    if not request.skip_user_message:
+                        await store.add_message(
+                            conv_id=request.conversation_id,
+                            role="user",
+                            content=request.question
+                        )
 
                     # Save assistant message with sources
                     await store.add_message(
@@ -1374,33 +1377,35 @@ async def delete_conversation(conversation_id: str) -> Dict[str, Any]:
 
 
 # ==========================================
-# Branched Conversation Endpoints
+# Thread-Based Conversation Branching Endpoints
 # ==========================================
 
 class EditMessageRequest(BaseModel):
-    """Request model for editing a message (creates a branch)."""
+    """Request model for editing a message (creates a new thread)."""
     new_content: str
 
 
-class SwitchBranchRequest(BaseModel):
-    """Request model for switching branches."""
-    branch_id: Optional[str] = None
-    message_id: Optional[str] = None
-    direction: Optional[str] = None  # 'left' or 'right'
+class SwitchThreadRequest(BaseModel):
+    """Request model for switching threads."""
+    thread_id: Optional[int] = None
+    position: Optional[int] = None
+    direction: Optional[str] = None  # 'prev' or 'next'
 
 
-@router.post("/conversations/{conversation_id}/messages/{message_id}/edit", summary="Edit a message (creates branch)")
+@router.post("/conversations/{conversation_id}/messages/{message_id}/edit", summary="Edit a message (creates new thread)")
 async def edit_message(
     conversation_id: str,
     message_id: str,
     request: EditMessageRequest
 ) -> Dict[str, Any]:
     """
-    Edit a user message by creating a new branch.
+    Edit a user message by creating a new thread.
 
-    This creates a new branch in the conversation tree, preserving the original
-    message and its responses. The new branch becomes active, and a new response
-    will be generated for the edited message.
+    Thread-based branching model:
+    - Creates a new thread with incremented thread_id
+    - Copies all messages from the original thread up to the edit point
+    - Adds the edited message as the new version at that position
+    - The new thread becomes active
 
     Args:
         conversation_id: UUID of the conversation
@@ -1408,34 +1413,39 @@ async def edit_message(
         request: The new content for the message
 
     Returns:
-        The newly created message in the new branch
+        The newly created message and thread info
     """
     try:
         from agentic_research.storage.conversation_store import get_conversation_store
 
         store = get_conversation_store()
 
-        # Edit the message (creates a new branch)
-        new_message = await store.edit_message(
+        # Edit the message (creates a new thread)
+        result = await store.edit_message(
             conv_id=conversation_id,
             message_id=message_id,
             new_content=request.new_content
         )
 
+        # Extract the new message from the result
+        new_message = result["new_message"]
+
         logger.info(
-            "Created new branch from message edit",
+            "Created new thread from message edit",
             conversation_id=conversation_id,
             original_message_id=message_id,
             new_message_id=new_message.id,
-            branch_id=new_message.branch_id
+            thread_id=new_message.thread_id,
+            position=new_message.position
         )
 
         return {
             "message": new_message.model_dump(),
-            "branch_id": new_message.branch_id,
-            "branch_index": new_message.branch_index,
-            "sibling_count": new_message.sibling_count,
-            "status": "branch_created"
+            "thread_id": new_message.thread_id,
+            "position": new_message.position,
+            "version_count": new_message.version_count,
+            "current_version": new_message.current_version,
+            "status": "thread_created"
         }
 
     except ValueError as e:
@@ -1457,52 +1467,46 @@ async def edit_message(
         )
 
 
-@router.post("/conversations/{conversation_id}/switch-branch", summary="Switch active branch")
-async def switch_branch(
+@router.post("/conversations/{conversation_id}/switch-thread", summary="Switch active thread")
+async def switch_thread(
     conversation_id: str,
-    request: SwitchBranchRequest
+    request: SwitchThreadRequest
 ) -> Dict[str, Any]:
     """
-    Switch to a different branch in the conversation.
+    Switch to a different thread in the conversation.
 
     Can be called in two ways:
-    1. With branch_id: Switch directly to that branch
-    2. With message_id and direction: Navigate left/right among sibling branches
+    1. With thread_id: Switch directly to that thread
+    2. With position and direction: Navigate prev/next among thread versions at that position
 
     Args:
         conversation_id: UUID of the conversation
-        request: Branch switch parameters
+        request: Thread switch parameters
 
     Returns:
-        The new active branch ID and updated messages
+        The new active thread ID and updated messages
     """
     try:
         from agentic_research.storage.conversation_store import get_conversation_store
 
         store = get_conversation_store()
 
-        # Switch branch
-        new_branch_id = await store.switch_branch(
+        # Switch thread
+        result = await store.switch_thread(
             conv_id=conversation_id,
-            branch_id=request.branch_id,
-            message_id=request.message_id,
+            thread_id=request.thread_id,
+            position=request.position,
             direction=request.direction
         )
 
-        # Get updated messages for the new branch
-        messages = await store.get_messages(conversation_id)
-
         logger.info(
-            "Switched conversation branch",
+            "Switched conversation thread",
             conversation_id=conversation_id,
-            new_branch_id=new_branch_id
+            new_thread_id=result.get("active_thread_id")
         )
 
-        return {
-            "active_branch_id": new_branch_id,
-            "messages": [m.model_dump() for m in messages],
-            "status": "branch_switched"
-        }
+        # Return result directly as it already has the correct structure
+        return result
 
     except ValueError as e:
         raise HTTPException(
@@ -1511,46 +1515,47 @@ async def switch_branch(
         )
     except Exception as e:
         logger.error(
-            "Failed to switch branch",
+            "Failed to switch thread",
             conversation_id=conversation_id,
             error=str(e),
             exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to switch branch: {str(e)}"
+            detail=f"Failed to switch thread: {str(e)}"
         )
 
 
-@router.get("/conversations/{conversation_id}/messages/{message_id}/branches", summary="Get branches at message")
-async def get_branches_at_message(
+@router.get("/conversations/{conversation_id}/threads/{position}", summary="Get thread versions at position")
+async def get_threads_at_position(
     conversation_id: str,
-    message_id: str
+    position: int
 ) -> Dict[str, Any]:
     """
-    Get information about all branches at a specific message point.
+    Get information about all thread versions at a specific message position.
 
-    This shows how many sibling branches exist and provides navigation info
-    for the < 1/3 > style branch selector UI.
+    This shows how many thread versions exist at that position and provides
+    navigation info for the < 1/3 > style version selector UI.
 
     Args:
         conversation_id: UUID of the conversation
-        message_id: UUID of the message
+        position: The message position (1-indexed)
 
     Returns:
-        Branch information including count and previews
+        Thread version information including count and previews
     """
     try:
         from agentic_research.storage.conversation_store import get_conversation_store
 
         store = get_conversation_store()
 
-        branch_info = await store.get_branches_at_message(
+        thread_info = await store.get_threads_at_position(
             conv_id=conversation_id,
-            message_id=message_id
+            position=position
         )
 
-        return branch_info.model_dump()
+        # Return as dict (ThreadInfo is a Pydantic model)
+        return thread_info.model_dump() if hasattr(thread_info, 'model_dump') else thread_info
 
     except ValueError as e:
         raise HTTPException(
@@ -1559,7 +1564,154 @@ async def get_branches_at_message(
         )
     except Exception as e:
         logger.error(
-            "Failed to get branches",
+            "Failed to get threads at position",
+            conversation_id=conversation_id,
+            position=position,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get threads: {str(e)}"
+        )
+
+
+@router.delete("/conversations/{conversation_id}/threads/{thread_id}", summary="Delete a thread")
+async def delete_thread(
+    conversation_id: str,
+    thread_id: int
+) -> Dict[str, Any]:
+    """
+    Delete a specific thread and all its messages.
+
+    Cannot delete thread 0 (the original conversation).
+    If the deleted thread was active, switches back to thread 0.
+
+    Args:
+        conversation_id: UUID of the conversation
+        thread_id: ID of the thread to delete (must be > 0)
+
+    Returns:
+        Success message
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+
+        store = get_conversation_store()
+
+        success = await store.delete_thread(
+            conv_id=conversation_id,
+            thread_id=thread_id
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Thread {thread_id} not found"
+            )
+
+        logger.info(
+            "Deleted conversation thread",
+            conversation_id=conversation_id,
+            thread_id=thread_id
+        )
+
+        return {
+            "message": f"Thread {thread_id} deleted successfully",
+            "status": "deleted"
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to delete thread",
+            conversation_id=conversation_id,
+            thread_id=thread_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete thread: {str(e)}"
+        )
+
+
+# Keep backwards compatibility for old endpoint (redirect to new)
+@router.post("/conversations/{conversation_id}/switch-branch", summary="[Deprecated] Switch branch - use switch-thread")
+async def switch_branch_deprecated(
+    conversation_id: str,
+    request: SwitchThreadRequest
+) -> Dict[str, Any]:
+    """Deprecated: Use /switch-thread instead. This redirects to the new thread-based endpoint."""
+    return await switch_thread(conversation_id, request)
+
+
+@router.get("/conversations/{conversation_id}/messages/{message_id}/branches", summary="[Deprecated] Get branches - use threads endpoint")
+async def get_branches_at_message_deprecated(
+    conversation_id: str,
+    message_id: str
+) -> Dict[str, Any]:
+    """
+    Deprecated: Use /threads/{position} instead.
+
+    This endpoint is maintained for backwards compatibility but returns
+    thread-based data in the old format.
+    """
+    try:
+        from agentic_research.storage.conversation_store import get_conversation_store
+
+        store = get_conversation_store()
+
+        # Get the message to find its position
+        messages = await store.get_messages(conversation_id)
+        target_msg = None
+        for msg in messages:
+            if msg.id == message_id:
+                target_msg = msg
+                break
+
+        if not target_msg:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Message {message_id} not found"
+            )
+
+        # Get thread info at that position
+        thread_info = await store.get_threads_at_position(
+            conv_id=conversation_id,
+            position=target_msg.position
+        )
+
+        # Convert Pydantic model to dict if needed
+        info_dict = thread_info.model_dump() if hasattr(thread_info, 'model_dump') else thread_info
+
+        # Convert to old format for backwards compatibility
+        return {
+            "message_id": message_id,
+            "branch_count": info_dict.get("thread_count", 1),
+            "branches": [
+                {
+                    "branch_id": str(v["thread_id"]),
+                    "branch_index": i,
+                    "message_id": v["message_id"],
+                    "first_message_preview": v["content_preview"],
+                    "timestamp": v["timestamp"]
+                }
+                for i, v in enumerate(info_dict.get("threads", []))
+            ]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to get branches (deprecated)",
             conversation_id=conversation_id,
             message_id=message_id,
             error=str(e),
@@ -1571,61 +1723,192 @@ async def get_branches_at_message(
         )
 
 
-@router.delete("/conversations/{conversation_id}/branches/{branch_id}", summary="Delete a branch")
-async def delete_branch(
-    conversation_id: str,
-    branch_id: str
-) -> Dict[str, Any]:
-    """
-    Delete a specific branch and all its messages.
+# =============================================================================
+# Content Generation Endpoints (Twitter/X + Blog Posts)
+# =============================================================================
 
-    If the deleted branch was active, switches back to the main branch.
+@router.post(
+    "/conversations/{conversation_id}/generate-content",
+    response_model=ContentGenerationResponse,
+    summary="Generate shareable content from conversation"
+)
+async def generate_content(
+    conversation_id: str,
+    request: ContentGenerationRequest
+) -> ContentGenerationResponse:
+    """
+    Generate shareable content (Twitter thread or blog post) from a conversation.
+
+    This endpoint uses the Content Generator Agent (Praval) to:
+    - Extract key insights from the Q&A conversation
+    - Format them based on the requested output format
+    - Include proper citations to referenced papers
+    - Learn from successful generation patterns over time
 
     Args:
-        conversation_id: UUID of the conversation
-        branch_id: UUID of the branch to delete
+        conversation_id: The conversation to generate content from
+        request: Content generation options (format, style, etc.)
 
     Returns:
-        Success message
+        Generated content (tweets or blog post) with citations
     """
+    start_time = time.time()
+
     try:
         from agentic_research.storage.conversation_store import get_conversation_store
+        from agents.interaction.content_generator import content_generator_agent
 
         store = get_conversation_store()
 
-        success = await store.delete_branch(
-            conv_id=conversation_id,
-            branch_id=branch_id
-        )
-
-        if not success:
+        # Fetch conversation messages
+        conversation = await store.get_conversation(conversation_id)
+        if not conversation:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Branch {branch_id} not found"
+                detail=f"Conversation {conversation_id} not found"
             )
 
+        messages = await store.get_messages(conversation_id)
+        if not messages:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Conversation has no messages to generate content from"
+            )
+
+        # Build conversation context and extract citations
+        conversation_text = []
+        all_sources = []
+        paper_ids = set()
+
+        for msg in messages:
+            role = "User" if msg.role == "user" else "Assistant"
+            conversation_text.append(f"{role}: {msg.content}")
+
+            # Extract sources from assistant messages
+            if msg.role == "assistant" and msg.sources:
+                for source in msg.sources:
+                    # Handle both dict and object access (sources may be dicts from DB)
+                    if isinstance(source, dict):
+                        paper_id = source.get("paper_id", "")
+                        title = source.get("title", "")
+                        relevance = source.get("relevance_score", 0.0)
+                    else:
+                        paper_id = source.paper_id
+                        title = source.title
+                        relevance = source.relevance_score
+
+                    if paper_id:
+                        paper_ids.add(paper_id)
+                        all_sources.append({
+                            "title": title,
+                            "paper_id": paper_id,
+                            "relevance": relevance
+                        })
+
+        # Format papers for agent
+        papers_list = "\n".join([
+            f"- {s['title']} (https://arxiv.org/abs/{s['paper_id']})"
+            for s in all_sources[:10]  # Limit to top 10 sources
+        ]) if all_sources else "No papers cited"
+
+        # Create a simple spore-like object for the agent
+        # The agent accesses spore.knowledge.get() so we use a simple namespace
+        class SimpleSpore:
+            """Simple spore-like object for direct agent invocation."""
+            def __init__(self, knowledge: dict):
+                self.knowledge = knowledge
+
+        spore = SimpleSpore(knowledge={
+            "conversation_text": conversation_text,
+            "papers_list": papers_list,
+            "paper_ids": list(paper_ids),
+            "format": request.format.value,
+            "style": request.style.value,
+            "max_tweets": request.max_tweets,
+            "include_toc": request.include_toc,
+            "custom_prompt": request.custom_prompt or ""
+        })
+
+        # Call content generator agent directly for synchronous response
         logger.info(
-            "Deleted conversation branch",
+            "Invoking content generator agent",
             conversation_id=conversation_id,
-            branch_id=branch_id
+            format=request.format.value,
+            style=request.style.value
         )
 
-        return {
-            "message": f"Branch {branch_id} deleted successfully",
-            "status": "deleted"
-        }
+        agent_result = content_generator_agent(spore)
+
+        # Check for errors from agent
+        if agent_result.get("error"):
+            logger.error(
+                "Content generator agent returned error",
+                error=agent_result["error"]
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Content generation failed: {agent_result['error']}"
+            )
+
+        generation_time = int((time.time() - start_time) * 1000)
+
+        # Build response based on format
+        if request.format == ContentFormat.TWITTER:
+            tweets = []
+            for t in agent_result.get("tweets", []):
+                tweets.append(Tweet(
+                    position=t.get("position", len(tweets) + 1),
+                    content=t.get("content", ""),
+                    char_count=t.get("char_count", len(t.get("content", ""))),
+                    has_citation=t.get("has_citation", False),
+                    citation_url=t.get("citation_url")
+                ))
+
+            return ContentGenerationResponse(
+                format=ContentFormat.TWITTER,
+                style=request.style,
+                tweets=tweets,
+                blog_post=None,
+                papers_cited=agent_result.get("paper_ids", list(paper_ids)),
+                generation_time_ms=generation_time
+            )
+
+        else:
+            # Blog format
+            blog_data = agent_result.get("blog_post", {})
+
+            # Build references list from sources
+            references = []
+            for source in all_sources[:10]:
+                references.append(
+                    f"[{len(references) + 1}] {source['title']}. https://arxiv.org/abs/{source['paper_id']}"
+                )
+
+            return ContentGenerationResponse(
+                format=ContentFormat.BLOG,
+                style=request.style,
+                tweets=None,
+                blog_post=BlogPost(
+                    title=blog_data.get("title", "Research Summary"),
+                    content=blog_data.get("content", ""),
+                    word_count=blog_data.get("word_count", 0),
+                    references=references
+                ),
+                papers_cited=agent_result.get("paper_ids", list(paper_ids)),
+                generation_time_ms=generation_time
+            )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(
-            "Failed to delete branch",
+            "Failed to generate content",
             conversation_id=conversation_id,
-            branch_id=branch_id,
+            format=request.format.value,
             error=str(e),
             exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete branch: {str(e)}"
+            detail=f"Failed to generate content: {str(e)}"
         )

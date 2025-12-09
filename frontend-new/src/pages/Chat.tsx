@@ -12,6 +12,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { apiClient } from '../services/api/client';
 import { useChatStore } from '../store/useChatStore';
+import ContentGeneratorModal from '../components/content/ContentGeneratorModal';
 import type { Message, QuestionRequest } from '../types';
 
 export default function Chat() {
@@ -19,6 +20,7 @@ export default function Chat() {
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set());
   const [showSidebar, setShowSidebar] = useState(true);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [showContentModal, setShowContentModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -51,7 +53,7 @@ export default function Chat() {
       console.log('Loaded conversation:', data.id, 'with', data.messages?.length, 'messages');
       setCurrentConversation(data.id);
       clearMessages();
-      // Load messages from conversation with branching info
+      // Load messages from conversation with thread-based branching info
       if (data.messages) {
         data.messages.forEach((msg: any) => {
           addMessage({
@@ -60,12 +62,12 @@ export default function Chat() {
             content: msg.content,
             sources: msg.sources,
             timestamp: msg.timestamp,
-            parent_message_id: msg.parent_message_id,
-            branch_id: msg.branch_id,
-            branch_index: msg.branch_index,
-            has_branches: msg.has_branches,
-            sibling_count: msg.sibling_count,
-            sibling_index: msg.sibling_index
+            // Thread-based fields
+            thread_id: msg.thread_id ?? 0,
+            position: msg.position ?? 0,
+            has_other_versions: msg.has_other_versions ?? false,
+            version_count: msg.version_count ?? 1,
+            current_version: msg.current_version ?? 1
           });
         });
       }
@@ -138,7 +140,10 @@ export default function Chat() {
         role: 'assistant',
         content: data.answer,
         sources: data.sources,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        // Default thread fields (will be updated on reload)
+        thread_id: 0,
+        position: messages.length + 2  // +2 because user message was +1
       };
       addMessage(assistantMessage);
       // Refresh conversations list to update titles/timestamps
@@ -155,7 +160,9 @@ export default function Chat() {
         id: `msg-${Date.now()}-error`,
         role: 'assistant',
         content: `Sorry, I encountered an error: ${error.message || 'Unknown error'}`,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        thread_id: 0,
+        position: messages.length + 2
       };
       addMessage(errorMessage);
     }
@@ -186,7 +193,10 @@ export default function Chat() {
       id: `msg-${Date.now()}-user`,
       role: 'user',
       content: question.trim(),
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      // Default thread fields for new messages (will be updated on reload)
+      thread_id: 0,
+      position: messages.length + 1
     };
     addMessage(userMessage);
 
@@ -244,19 +254,31 @@ export default function Chat() {
     setQuestion('');
   };
 
-  // Edit message mutation (creates a branch)
+  // Edit message mutation (creates a new thread)
   const editMessageMutation = useMutation({
     mutationFn: async ({ messageId, newContent }: { messageId: string; newContent: string }) => {
       if (!currentConversationId) throw new Error('No conversation selected');
-      return apiClient.editMessage(currentConversationId, messageId, newContent);
+      // First create the new thread with the edited message
+      const branchResult = await apiClient.editMessage(currentConversationId, messageId, newContent);
+      // Then get a response for the edited question (skip saving user message since it's already saved)
+      const qaResponse = await apiClient.askQuestion({
+        question: newContent,
+        include_sources: true,
+        conversation_id: currentConversationId,
+        skip_user_message: true  // User message already saved by editMessage
+      });
+      return { branchResult, qaResponse, newContent };
     },
     onSuccess: async (data) => {
-      console.log('Branch created:', data);
+      console.log('Branch created with response:', data);
       setEditingMessageId(null);
       setQuestion('');
-      // Reload conversation to get updated branch
+      // Reload conversation to get updated branch with the new response
       if (currentConversationId) {
-        loadConversationMutation.mutate(currentConversationId);
+        // Small delay to ensure backend has processed the response
+        setTimeout(() => {
+          loadConversationMutation.mutate(currentConversationId);
+        }, 300);
       }
     },
     onError: (error: any) => {
@@ -265,14 +287,14 @@ export default function Chat() {
     }
   });
 
-  // Switch branch mutation
-  const switchBranchMutation = useMutation({
-    mutationFn: async ({ messageId, direction }: { messageId: string; direction: 'left' | 'right' }) => {
+  // Switch thread mutation (for navigating between versions)
+  const switchThreadMutation = useMutation({
+    mutationFn: async ({ position, direction }: { position: number; direction: 'prev' | 'next' }) => {
       if (!currentConversationId) throw new Error('No conversation selected');
-      return apiClient.switchBranch(currentConversationId, { message_id: messageId, direction });
+      return apiClient.switchThread(currentConversationId, { position, direction });
     },
     onSuccess: (data) => {
-      console.log('Branch switched:', data);
+      console.log('Thread switched:', data);
       // Update messages from response
       if (data.messages) {
         clearMessages();
@@ -283,23 +305,23 @@ export default function Chat() {
             content: msg.content,
             sources: msg.sources,
             timestamp: msg.timestamp,
-            parent_message_id: msg.parent_message_id,
-            branch_id: msg.branch_id,
-            branch_index: msg.branch_index,
-            sibling_count: msg.sibling_count,
-            sibling_index: msg.sibling_index
+            thread_id: msg.thread_id ?? 0,
+            position: msg.position ?? 0,
+            has_other_versions: msg.has_other_versions ?? false,
+            version_count: msg.version_count ?? 1,
+            current_version: msg.current_version ?? 1
           });
         });
       }
     },
     onError: (error: any) => {
-      console.error('Switch branch error:', error);
+      console.error('Switch thread error:', error);
     }
   });
 
-  // Handle branch navigation
-  const handleSwitchBranch = (messageId: string, direction: 'left' | 'right') => {
-    switchBranchMutation.mutate({ messageId, direction });
+  // Handle thread navigation (< 1/3 > style)
+  const handleSwitchThread = (position: number, direction: 'prev' | 'next') => {
+    switchThreadMutation.mutate({ position, direction });
   };
 
   return (
@@ -388,12 +410,21 @@ export default function Chat() {
               </div>
             </div>
             {messages.length > 0 && (
-              <button
-                onClick={handleClearChat}
-                className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-muted transition-colors"
-              >
-                Clear Chat
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowContentModal(true)}
+                  className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-muted transition-colors flex items-center gap-2"
+                  title="Generate Twitter thread or blog post"
+                >
+                  <span>📤</span> Share
+                </button>
+                <button
+                  onClick={handleClearChat}
+                  className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-muted transition-colors"
+                >
+                  Clear Chat
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -424,21 +455,21 @@ export default function Chat() {
                         : 'bg-card border border-border text-card-foreground'
                     }`}
                   >
-                    {/* Branch Navigation (< 1/3 > style) */}
-                    {message.sibling_count && message.sibling_count > 1 && (
+                    {/* Thread Version Navigation (< 1/3 > style) */}
+                    {message.has_other_versions && message.version_count && message.version_count > 1 && (
                       <div className="flex items-center justify-center gap-2 mb-2 text-xs opacity-80">
                         <button
-                          onClick={() => handleSwitchBranch(message.id, 'left')}
-                          disabled={(message.sibling_index || 0) <= 0 || switchBranchMutation.isPending}
+                          onClick={() => handleSwitchThread(message.position, 'prev')}
+                          disabled={(message.current_version || 1) <= 1 || switchThreadMutation.isPending}
                           className="px-2 py-1 rounded hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed"
                           title="Previous version"
                         >
                           ◀
                         </button>
-                        <span>{(message.sibling_index || 0) + 1}/{message.sibling_count}</span>
+                        <span>{message.current_version || 1}/{message.version_count}</span>
                         <button
-                          onClick={() => handleSwitchBranch(message.id, 'right')}
-                          disabled={(message.sibling_index || 0) >= (message.sibling_count - 1) || switchBranchMutation.isPending}
+                          onClick={() => handleSwitchThread(message.position, 'next')}
+                          disabled={(message.current_version || 1) >= message.version_count || switchThreadMutation.isPending}
                           className="px-2 py-1 rounded hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed"
                           title="Next version"
                         >
@@ -555,7 +586,7 @@ export default function Chat() {
           {editingMessageId && (
             <div className="container mx-auto max-w-4xl mb-2">
               <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted px-3 py-2 rounded-lg">
-                <span>✏️ Editing message - this will create a new branch</span>
+                <span>✏️ Editing message - this will create a new version</span>
                 <button
                   onClick={handleCancelEdit}
                   className="ml-auto text-xs px-2 py-1 bg-background rounded hover:bg-muted-foreground/10"
@@ -600,11 +631,18 @@ export default function Chat() {
                   : 'bg-primary text-primary-foreground hover:bg-primary/90'
               }`}
             >
-              {editMessageMutation.isPending ? 'Creating Branch...' : editingMessageId ? 'Resubmit' : 'Ask'}
+              {editMessageMutation.isPending ? 'Creating Version...' : editingMessageId ? 'Resubmit' : 'Ask'}
             </button>
           </form>
         </div>
       </div>
+
+      {/* Content Generator Modal */}
+      <ContentGeneratorModal
+        isOpen={showContentModal}
+        onClose={() => setShowContentModal(false)}
+        conversationId={currentConversationId || ''}
+      />
     </div>
   );
 }

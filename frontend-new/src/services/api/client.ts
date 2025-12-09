@@ -20,7 +20,12 @@ import type {
   ConversationWithMessages,
   KnowledgeBaseStats,
   ResearchInsights,
-  APIError
+  APIError,
+  Message,
+  ThreadVersionInfo,
+  ContentFormat,
+  ContentStyle,
+  ContentGenerationResponse
 } from '../../types';
 
 const API_BASE_URL = window.location.hostname === 'localhost'
@@ -224,16 +229,22 @@ class APIClient {
     return response.data;
   }
 
-  // Branching Operations
+  // Thread-Based Branching Operations
+
+  /**
+   * Edit a user message by creating a new thread.
+   * This copies all messages up to the edit point into a new thread.
+   */
   async editMessage(
     conversationId: string,
     messageId: string,
     newContent: string
   ): Promise<{
-    message: any;
-    branch_id: string;
-    branch_index: number;
-    sibling_count: number;
+    message: Message;
+    thread_id: number;
+    position: number;
+    version_count: number;
+    current_version: number;
     status: string;
   }> {
     const response = await this.client.post(
@@ -243,46 +254,63 @@ class APIClient {
     return response.data;
   }
 
-  async switchBranch(
+  /**
+   * Switch to a different thread in the conversation.
+   * Can switch directly by thread_id or navigate by position+direction.
+   */
+  async switchThread(
     conversationId: string,
-    params: { branch_id?: string; message_id?: string; direction?: 'left' | 'right' }
+    params: { thread_id?: number; position?: number; direction?: 'prev' | 'next' }
   ): Promise<{
-    active_branch_id: string | null;
-    messages: any[];
+    active_thread_id: number;
+    messages: Message[];
     status: string;
   }> {
     const response = await this.client.post(
-      `/research/conversations/${conversationId}/switch-branch`,
+      `/research/conversations/${conversationId}/switch-thread`,
       params
     );
     return response.data;
   }
 
-  async getBranchesAtMessage(
+  /**
+   * Get information about all thread versions at a specific position.
+   * Used for the < 1/3 > navigation UI.
+   */
+  async getThreadsAtPosition(
     conversationId: string,
-    messageId: string
-  ): Promise<{
-    message_id: string;
-    branch_count: number;
-    branches: Array<{
-      branch_id: string | null;
-      branch_index: number;
-      message_id: string;
-      first_message_preview: string;
-      timestamp: string;
-    }>;
-  }> {
+    position: number
+  ): Promise<ThreadVersionInfo> {
     const response = await this.client.get(
-      `/research/conversations/${conversationId}/messages/${messageId}/branches`
+      `/research/conversations/${conversationId}/threads/${position}`
     );
     return response.data;
   }
 
-  async deleteBranch(conversationId: string, branchId: string): Promise<{ message: string; status: string }> {
+  /**
+   * Delete a thread and all its messages.
+   * Cannot delete thread 0 (original conversation).
+   */
+  async deleteThread(
+    conversationId: string,
+    threadId: number
+  ): Promise<{ message: string; status: string }> {
     const response = await this.client.delete(
-      `/research/conversations/${conversationId}/branches/${branchId}`
+      `/research/conversations/${conversationId}/threads/${threadId}`
     );
     return response.data;
+  }
+
+  // Deprecated: Use switchThread instead
+  async switchBranch(
+    conversationId: string,
+    params: { thread_id?: number; position?: number; direction?: 'prev' | 'next' }
+  ): Promise<{
+    active_thread_id: number;
+    messages: Message[];
+    status: string;
+  }> {
+    return this.switchThread(conversationId, params);
   }
 
   async exportConversation(id: string, format: 'markdown' | 'json' | 'pdf'): Promise<Blob> {
@@ -313,6 +341,31 @@ class APIClient {
 
   async getPaperSummary(paperId: string): Promise<{ summary: string | null }> {
     const response = await this.client.get(`/papers/${paperId}/summary`);
+    return response.data;
+  }
+
+  // Content Generation (Twitter/X + Blog Posts)
+  async generateContent(
+    conversationId: string,
+    options: {
+      format: ContentFormat;
+      style?: ContentStyle;
+      maxTweets?: number;
+      includeToc?: boolean;
+      customPrompt?: string;
+    }
+  ): Promise<ContentGenerationResponse> {
+    const response = await this.client.post<ContentGenerationResponse>(
+      `/research/conversations/${conversationId}/generate-content`,
+      {
+        conversation_id: conversationId,
+        format: options.format,
+        style: options.style || 'academic',
+        max_tweets: options.maxTweets || 10,
+        include_toc: options.includeToc !== false,
+        custom_prompt: options.customPrompt || ''
+      }
+    );
     return response.data;
   }
 }
