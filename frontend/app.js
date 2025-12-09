@@ -9,6 +9,10 @@ let sseConnection = null;
 // Message ID counter to ensure uniqueness
 let messageCounter = 0;
 
+// Current conversation state
+let currentConversationId = null;
+let currentMessages = [];  // Track messages with their metadata for branching
+
 // Connect to SSE for real-time agent updates
 function connectSSE() {
     const statusIndicator = document.getElementById('status-indicator');
@@ -272,8 +276,8 @@ async function indexSelectedPapers() {
     }
 }
 
-// Ask a question
-async function askQuestion() {
+// Ask a question (optionally as an edit/branch)
+async function askQuestion(editMessageId = null, parentMessageId = null) {
     const questionInput = document.getElementById('question-input');
     const question = questionInput.value.trim();
     const askBtn = document.getElementById('ask-btn');
@@ -283,8 +287,30 @@ async function askQuestion() {
         return;
     }
 
+    // Create conversation if needed
+    if (!currentConversationId) {
+        try {
+            const convResponse = await fetch(`${API_BASE_URL}/research/conversations`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: null })
+            });
+            const convData = await convResponse.json();
+            currentConversationId = convData.id;
+            console.log('Created conversation:', currentConversationId);
+        } catch (e) {
+            console.error('Failed to create conversation:', e);
+        }
+    }
+
+    // If editing, handle branch creation
+    if (editMessageId) {
+        await handleEditMessage(editMessageId, question);
+        return;
+    }
+
     // Add user message to chat
-    addMessage('user', question);
+    const userMsgId = addMessage('user', question);
 
     // Clear input
     questionInput.value = '';
@@ -304,7 +330,8 @@ async function askQuestion() {
             },
             body: JSON.stringify({
                 question: question,
-                include_sources: true
+                include_sources: true,
+                conversation_id: currentConversationId
             })
         });
 
@@ -313,6 +340,11 @@ async function askQuestion() {
         }
 
         const data = await response.json();
+
+        // Update conversation ID from response if provided
+        if (data.conversation_id) {
+            currentConversationId = data.conversation_id;
+        }
 
         // Remove loading message
         document.getElementById(loadingId)?.remove();
@@ -333,6 +365,179 @@ async function askQuestion() {
         askBtn.disabled = false;
         askBtn.textContent = 'Ask';
     }
+}
+
+// Handle editing a message (creates a new branch)
+async function handleEditMessage(messageId, newContent) {
+    const askBtn = document.getElementById('ask-btn');
+    askBtn.disabled = true;
+    askBtn.textContent = 'Creating branch...';
+
+    try {
+        // Call the edit endpoint to create a branch
+        const response = await fetch(
+            `${API_BASE_URL}/research/conversations/${currentConversationId}/messages/${messageId}/edit`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_content: newContent })
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const branchData = await response.json();
+        console.log('Branch created:', branchData);
+
+        // Refresh the conversation to show the new branch
+        await loadConversation(currentConversationId);
+
+        // Clear input
+        document.getElementById('question-input').value = '';
+
+        // Now generate a response for the edited message
+        const loadingId = addMessage('assistant', 'Generating response for edited message...', true);
+
+        const qaResponse = await fetch(`${API_BASE_URL}/research/ask`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                question: newContent,
+                include_sources: true,
+                conversation_id: currentConversationId
+            })
+        });
+
+        document.getElementById(loadingId)?.remove();
+
+        if (qaResponse.ok) {
+            const qaData = await qaResponse.json();
+            addMessage('assistant', qaData.answer, false, qaData.sources, qaData.followup_questions);
+            displayFollowupQuestions(qaData.followup_questions || []);
+        }
+
+    } catch (error) {
+        console.error('Edit message error:', error);
+        alert(`Failed to edit message: ${error.message}`);
+    } finally {
+        askBtn.disabled = false;
+        askBtn.textContent = 'Ask';
+    }
+}
+
+// Load a conversation and its messages
+async function loadConversation(conversationId) {
+    try {
+        const response = await fetch(`${API_BASE_URL}/research/conversations/${conversationId}`);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        currentConversationId = data.id;
+        currentMessages = data.messages || [];
+
+        // Clear chat and re-render messages
+        const chatMessages = document.getElementById('chat-messages');
+        chatMessages.innerHTML = '';
+
+        // Add welcome message first
+        addMessage('assistant', 'Welcome! Search for research papers above, then ask me questions about them. I\'ll use semantic search to find relevant content and provide detailed answers with source citations.');
+
+        // Render all messages from the conversation
+        for (const msg of currentMessages) {
+            addMessage(msg.role, msg.content, false, msg.sources, null, msg);
+        }
+
+        console.log('Loaded conversation:', conversationId, 'with', currentMessages.length, 'messages');
+
+    } catch (error) {
+        console.error('Failed to load conversation:', error);
+    }
+}
+
+// Switch to a different branch
+async function switchBranch(messageId, direction) {
+    try {
+        const response = await fetch(
+            `${API_BASE_URL}/research/conversations/${currentConversationId}/switch-branch`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message_id: messageId,
+                    direction: direction
+                })
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('Switched branch:', data);
+
+        // Refresh conversation to show new branch
+        await loadConversation(currentConversationId);
+
+    } catch (error) {
+        console.error('Failed to switch branch:', error);
+        alert(`Failed to switch branch: ${error.message}`);
+    }
+}
+
+// Start editing a message
+function startEditMessage(messageId, originalContent) {
+    const questionInput = document.getElementById('question-input');
+    questionInput.value = originalContent;
+    questionInput.focus();
+
+    // Store the editing state
+    questionInput.dataset.editingMessageId = messageId;
+
+    // Update button text
+    const askBtn = document.getElementById('ask-btn');
+    askBtn.textContent = 'Resubmit';
+    askBtn.onclick = () => {
+        const editId = questionInput.dataset.editingMessageId;
+        delete questionInput.dataset.editingMessageId;
+        askBtn.textContent = 'Ask';
+        askBtn.onclick = () => askQuestion();
+        askQuestion(editId);
+    };
+
+    // Show cancel option
+    showEditCancelOption();
+}
+
+// Show cancel edit option
+function showEditCancelOption() {
+    const inputContainer = document.getElementById('question-input').parentElement;
+    if (!document.getElementById('cancel-edit-btn')) {
+        const cancelBtn = document.createElement('button');
+        cancelBtn.id = 'cancel-edit-btn';
+        cancelBtn.className = 'px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.onclick = cancelEditMessage;
+        inputContainer.appendChild(cancelBtn);
+    }
+}
+
+// Cancel editing
+function cancelEditMessage() {
+    const questionInput = document.getElementById('question-input');
+    questionInput.value = '';
+    delete questionInput.dataset.editingMessageId;
+
+    const askBtn = document.getElementById('ask-btn');
+    askBtn.textContent = 'Ask';
+    askBtn.onclick = () => askQuestion();
+
+    const cancelBtn = document.getElementById('cancel-edit-btn');
+    if (cancelBtn) cancelBtn.remove();
 }
 
 // Render Markdown with LaTeX support
@@ -440,9 +645,10 @@ async function copyWithCitations(messageId) {
 }
 
 // Add message to chat
-function addMessage(role, content, isLoading = false, sources = null, followups = null) {
+function addMessage(role, content, isLoading = false, sources = null, followups = null, messageMetadata = null) {
     const chatMessages = document.getElementById('chat-messages');
-    const messageId = `msg-${Date.now()}-${messageCounter++}`;
+    // Use server ID if available, otherwise generate client-side ID
+    const messageId = messageMetadata?.id || `msg-${Date.now()}-${messageCounter++}`;
 
     const messageClass = role === 'user' ? 'message-user' : 'message-assistant';
     const alignment = role === 'user' ? 'justify-end' : 'justify-start';
@@ -468,9 +674,52 @@ function addMessage(role, content, isLoading = false, sources = null, followups 
         ? `<p class="text-sm whitespace-pre-wrap">${escapeHtml(content)}</p>`
         : `<div class="text-sm markdown-content">${renderMarkdown(content)}</div>`;
 
+    // Build action buttons based on role and state
+    let actionsHtml = '';
+
+    // Edit button for user messages (not loading)
+    if (role === 'user' && !isLoading && messageMetadata?.id) {
+        actionsHtml += `
+            <button
+                onclick="startEditMessage('${messageMetadata.id}', '${escapeHtml(content).replace(/'/g, "\\'")}')"
+                class="edit-button text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors opacity-0 group-hover:opacity-100"
+                title="Edit & resubmit"
+            >
+                ✏️ Edit
+            </button>
+        `;
+    }
+
+    // Branch navigation for messages with siblings (< 1/3 > style)
+    if (messageMetadata && messageMetadata.sibling_count > 1) {
+        const currentIndex = messageMetadata.sibling_index + 1;
+        const total = messageMetadata.sibling_count;
+        actionsHtml += `
+            <div class="branch-nav flex items-center space-x-1 text-xs">
+                <button
+                    onclick="switchBranch('${messageMetadata.id}', 'left')"
+                    class="px-2 py-1 rounded ${currentIndex <= 1 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-600 hover:bg-gray-100'}"
+                    ${currentIndex <= 1 ? 'disabled' : ''}
+                    title="Previous version"
+                >
+                    ◀
+                </button>
+                <span class="text-gray-500">${currentIndex}/${total}</span>
+                <button
+                    onclick="switchBranch('${messageMetadata.id}', 'right')"
+                    class="px-2 py-1 rounded ${currentIndex >= total ? 'text-gray-300 cursor-not-allowed' : 'text-gray-600 hover:bg-gray-100'}"
+                    ${currentIndex >= total ? 'disabled' : ''}
+                    title="Next version"
+                >
+                    ▶
+                </button>
+            </div>
+        `;
+    }
+
     // Add copy button for assistant messages (but not loading messages)
-    const copyButtonHtml = (role === 'assistant' && !isLoading) ? `
-        <div class="flex justify-end mt-2">
+    if (role === 'assistant' && !isLoading) {
+        actionsHtml += `
             <button
                 onclick="copyWithCitations('${messageId}')"
                 class="copy-button text-xs px-3 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
@@ -478,20 +727,32 @@ function addMessage(role, content, isLoading = false, sources = null, followups 
             >
                 📋 Copy with Citations
             </button>
+        `;
+    }
+
+    // Wrap actions in a flex container
+    const actionsContainerHtml = actionsHtml ? `
+        <div class="flex items-center justify-between mt-2 space-x-2">
+            ${actionsHtml}
         </div>
     ` : '';
 
     const messageHtml = `
-        <div id="${messageId}" class="flex ${alignment}" data-content="${escapeHtml(content)}" data-sources="${escapeHtml(JSON.stringify(sources || []))}">
+        <div id="${messageId}" class="flex ${alignment} group" data-content="${escapeHtml(content)}" data-sources="${escapeHtml(JSON.stringify(sources || []))}" data-message-id="${messageMetadata?.id || ''}">
             <div class="${messageClass} rounded-lg px-4 py-3 max-w-2xl ${isLoading ? 'animate-pulse' : ''}">
                 ${contentHtml}
                 ${sourcesHtml}
-                ${copyButtonHtml}
+                ${actionsContainerHtml}
             </div>
         </div>
     `;
 
     chatMessages.insertAdjacentHTML('beforeend', messageHtml);
+
+    // Track message in currentMessages if it has server metadata
+    if (messageMetadata) {
+        // Already in currentMessages from loadConversation, don't duplicate
+    }
 
     // If this is an assistant message, render LaTeX equations
     if (role === 'assistant' && !isLoading) {
