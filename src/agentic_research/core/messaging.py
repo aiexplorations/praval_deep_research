@@ -36,24 +36,19 @@ class MessagePublisher:
         self._initialized = False
 
     async def initialize(self):
-        """Initialize Reef with RabbitMQ backend."""
+        """Initialize using the global Reef (InMemory backend, shared with agents)."""
         if self._initialized:
             return
 
         try:
-            backend = RabbitMQBackend()
-            self.reef = Reef(backend=backend)
+            # Use the GLOBAL reef - same one used by start_agents() with InMemory backend
+            self.reef = get_reef()
 
-            await self.reef.initialize_backend({
-                'url': self.settings.RABBITMQ_URL,
-                'exchange_name': 'praval.research',  # Same as agents
-            })
-
-            # Create the broadcast channel (same as agents use)
+            # Create the broadcast channel if not exists
             self.reef.create_channel(BROADCAST_CHANNEL)
 
             self._initialized = True
-            logger.info(f"MessagePublisher initialized with RabbitMQ (channel: {BROADCAST_CHANNEL})")
+            logger.info(f"MessagePublisher initialized with InMemory backend (channel: {BROADCAST_CHANNEL})")
 
         except Exception as e:
             logger.error(f"Failed to initialize MessagePublisher: {e}")
@@ -152,7 +147,7 @@ class MessagePublisher:
     ) -> bool:
         """Publish papers for indexing. document_processor responds_to: papers_found"""
         try:
-            await self.broadcast_async({
+            knowledge = {
                 "type": "papers_found",
                 "papers": papers,
                 "original_query": f"Manual selection of {len(papers)} papers",
@@ -163,7 +158,8 @@ class MessagePublisher:
                 },
                 "session_id": session_id,
                 **kwargs
-            })
+            }
+            result = await self.broadcast_async(knowledge)
             logger.info(f"Published papers_found: {len(papers)} papers")
             return True
         except Exception as e:

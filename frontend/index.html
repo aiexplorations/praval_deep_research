@@ -161,9 +161,136 @@
         .group:hover .message-user {
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
+
+        /* Toast notification styles */
+        .toast-container {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-width: 400px;
+        }
+
+        .toast {
+            display: flex;
+            align-items: flex-start;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            animation: toast-slide-in 0.3s ease-out;
+            min-width: 300px;
+        }
+
+        .toast.toast-exit {
+            animation: toast-slide-out 0.3s ease-in forwards;
+        }
+
+        @keyframes toast-slide-in {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes toast-slide-out {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+
+        .toast-success {
+            background-color: #ecfdf5;
+            border: 1px solid #10b981;
+            color: #065f46;
+        }
+
+        .toast-info {
+            background-color: #eff6ff;
+            border: 1px solid #3b82f6;
+            color: #1e40af;
+        }
+
+        .toast-warning {
+            background-color: #fffbeb;
+            border: 1px solid #f59e0b;
+            color: #92400e;
+        }
+
+        .toast-error {
+            background-color: #fef2f2;
+            border: 1px solid #ef4444;
+            color: #991b1b;
+        }
+
+        .toast-icon {
+            flex-shrink: 0;
+            width: 1.25rem;
+            height: 1.25rem;
+            margin-right: 0.75rem;
+        }
+
+        .toast-content {
+            flex: 1;
+        }
+
+        .toast-title {
+            font-weight: 600;
+            font-size: 0.875rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .toast-message {
+            font-size: 0.8rem;
+            opacity: 0.9;
+        }
+
+        .toast-close {
+            flex-shrink: 0;
+            margin-left: 0.5rem;
+            cursor: pointer;
+            opacity: 0.5;
+            transition: opacity 0.2s;
+        }
+
+        .toast-close:hover {
+            opacity: 1;
+        }
+
+        /* Indexing progress panel */
+        .indexing-progress {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .progress-bar {
+            height: 4px;
+            background-color: rgba(255, 255, 255, 0.3);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background-color: white;
+            transition: width 0.3s ease;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
     <!-- Header -->
     <header class="bg-white shadow-sm border-b border-gray-200">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
@@ -176,6 +303,9 @@
                     </div>
                 </div>
                 <div class="flex items-center space-x-4">
+                    <a href="discover.html" class="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors">
+                        🔍 Discover
+                    </a>
                     <a href="knowledge-base.html" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
                         📚 Knowledge Base
                     </a>
@@ -227,6 +357,24 @@
                     <span class="text-sm font-medium text-blue-900" id="agent-status-text">Processing...</span>
                 </div>
                 <div id="agent-details" class="mt-2 text-sm text-blue-800"></div>
+            </div>
+
+            <!-- Indexing Progress Panel -->
+            <div id="indexing-progress" class="hidden indexing-progress rounded-lg p-4 mb-4">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center space-x-2">
+                        <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span class="font-medium" id="indexing-stage">Indexing papers...</span>
+                    </div>
+                    <span class="text-sm opacity-75" id="indexing-count">0/0</span>
+                </div>
+                <div class="progress-bar mb-2">
+                    <div class="progress-bar-fill" id="indexing-progress-bar" style="width: 0%"></div>
+                </div>
+                <div class="text-sm opacity-75" id="indexing-current-paper">Preparing...</div>
             </div>
 
             <!-- Index Selected Button -->

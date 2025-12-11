@@ -14,7 +14,7 @@ from praval import Spore
 logger = logging.getLogger(__name__)
 
 
-@agent("semantic_analyzer", responds_to=["documents_processed"], memory=True)
+@agent("semantic_analyzer", channel="broadcast", responds_to=["documents_processed"], memory=True)
 def semantic_analysis_agent(spore: Spore) -> None:
     """
     I am a semantic analysis specialist who analyzes research content for themes, 

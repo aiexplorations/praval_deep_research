@@ -18,17 +18,27 @@ from agentic_research.storage.qdrant_client import QdrantClientWrapper
 from agentic_research.storage.embeddings import EmbeddingsGenerator
 from processors.pdf_processor import PDFProcessor, PDFProcessingError
 
+# Import SSE broadcast helper for real-time notifications
+try:
+    from agentic_research.api.routes.sse import broadcast_agent_event_sync
+except ImportError:
+    # Fallback if SSE module not available
+    def broadcast_agent_event_sync(event: dict) -> None:
+        pass
+
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-@agent("document_processor", responds_to=["papers_found"], memory=True)
+@agent("document_processor", channel="broadcast", responds_to=["papers_found"], memory=True)
 def document_processing_agent(spore: Spore) -> None:
     """
     I am a document processing specialist who handles downloading, parsing,
     and storing research papers with intelligent extraction and metadata
     organization.
+
+    TRIGGERED: spore.knowledge.type == 'papers_found'
 
     My expertise:
     - PDF download and secure storage in MinIO
@@ -59,11 +69,24 @@ def document_processing_agent(spore: Spore) -> None:
 
     logger.info(f"✅ STARTING Document Processing: {len(papers)} papers for query '{query}'")
 
+    # Emit SSE event for indexing start
+    broadcast_agent_event_sync({
+        "event_type": "indexing_progress",
+        "stage": "starting",
+        "current": 0,
+        "total": len(papers),
+        "current_paper": None
+    })
+
     # Initialize storage clients
     try:
+        logger.info("Initializing MinIO client...")
         minio_client = MinIOClient(settings)
+        logger.info("Initializing Qdrant client...")
         qdrant_client = QdrantClientWrapper(settings)
+        logger.info("Initializing embeddings generator...")
         embeddings_gen = EmbeddingsGenerator(settings)
+        logger.info("Initializing PDF processor...")
         pdf_processor = PDFProcessor(
             chunk_size=settings.CHUNK_SIZE,
             chunk_overlap=settings.CHUNK_OVERLAP,
@@ -71,13 +94,15 @@ def document_processing_agent(spore: Spore) -> None:
         )
 
         # Ensure Qdrant collection exists
+        logger.info("Creating/verifying Qdrant collection...")
         qdrant_client.create_collection(
             vector_size=settings.EMBEDDING_DIMENSIONS,
             recreate=False
         )
+        logger.info("Storage clients initialized successfully")
 
     except Exception as e:
-        logger.error(f"Failed to initialize storage clients: {e}")
+        logger.error(f"Failed to initialize storage clients: {e}", exc_info=True)
         broadcast({
             "type": "processing_error",
             "knowledge": {
@@ -117,49 +142,46 @@ def document_processing_agent(spore: Spore) -> None:
 
         logger.info(f"⚙️ Processing {i}/{len(papers)}: {paper_title[:60]}...")
 
+        # Emit SSE progress event
+        broadcast_agent_event_sync({
+            "event_type": "indexing_progress",
+            "stage": "processing",
+            "current": i - 1,
+            "total": len(papers),
+            "current_paper": paper_title[:80]
+        })
+
         try:
-            # STEP 1: Enhanced LLM Analysis (existing functionality)
-            analysis_prompt = f"""
-            Analyze this research paper with expert processing:
+            # STEP 1: Enhanced LLM Analysis (optional - should not block indexing)
+            analysis = None
+            extracted_metadata = None
 
-            Title: {paper.get('title', '')}
-            Abstract: {paper.get('abstract', '')}
-            Authors: {', '.join(paper.get('authors', []))}
-            Categories: {', '.join(paper.get('categories', []))}
-            Venue: {paper.get('venue', 'Unknown')}
-            ArXiv ID: {arxiv_id}
+            try:
+                analysis_prompt = f"""
+                Analyze this research paper briefly:
 
-            Processing Context:
-            - Original Query: {query}
-            - Domain: {search_metadata.get('domain', 'unknown')}
-            - Past Processing Experience: {len(past_processing)} sessions
+                Title: {paper.get('title', '')}
+                Abstract: {paper.get('abstract', '')[:500]}
 
-            Provide comprehensive analysis including:
-            1. Key contributions and novelty
-            2. Methodological approach
-            3. Results quality
-            4. Limitations
-            5. Relevance to query
-            6. Technical complexity
+                Provide a 2-3 sentence analysis of key contributions.
+                """
 
-            Keep it concise but informative.
-            """
+                analysis = chat(analysis_prompt)
 
-            analysis = chat(analysis_prompt)
+                # STEP 2: Extract key metadata (optional)
+                metadata_prompt = f"""
+                Extract 3-5 key themes from: {paper.get('title', '')}
+                """
 
-            # STEP 2: Extract key metadata
-            metadata_prompt = f"""
-            Extract structured metadata from this paper:
+                extracted_metadata = chat(metadata_prompt)
 
-            Title: {paper.get('title', '')}
-            Abstract: {paper.get('abstract', '')}
+            except Exception as llm_error:
+                # LLM analysis is optional - log and continue with indexing
+                logger.warning(f"LLM analysis skipped for '{paper_title[:50]}': {str(llm_error)[:100]}")
+                analysis = "LLM analysis unavailable"
+                extracted_metadata = "Metadata extraction skipped"
 
-            Return 3-5 main research themes and 5-7 key technical concepts.
-            """
-
-            extracted_metadata = chat(metadata_prompt)
-
-            # STEP 3: Download and process PDF
+            # STEP 3: Download and process PDF (CORE FUNCTIONALITY - must work)
             pdf_path = None
             extracted_text = None
             chunks_with_embeddings = []
@@ -282,21 +304,50 @@ def document_processing_agent(spore: Spore) -> None:
             processed_papers.append(processed_paper)
             processing_stats["successful"] += 1
 
+            # Emit SSE event for successful paper indexing
+            broadcast_agent_event_sync({
+                "event_type": "paper_indexed",
+                "title": paper_title,
+                "arxiv_id": arxiv_id,
+                "vectors_stored": len(chunks_with_embeddings)
+            })
+
             # Remember successful processing patterns
             success_pattern = f"processing_patterns: Successfully processed {paper.get('categories', ['unknown'])[0] if paper.get('categories') else 'unknown'} paper with {len(chunks_with_embeddings)} vectors"
             document_processing_agent.remember(success_pattern, importance=0.6)
 
         except Exception as e:
-            logger.error(f"Failed to process paper '{paper_title}': {e}")
+            error_message = str(e)
+            logger.error(f"Failed to process paper '{paper_title}': {error_message}")
             processing_stats["failed"] += 1
-            processing_stats["errors"].append(f"{paper_title}: {str(e)}")
+            processing_stats["errors"].append(f"{paper_title}: {error_message}")
+
+            # Emit SSE error event so frontend knows about the failure
+            broadcast_agent_event_sync({
+                "event_type": "indexing_error",
+                "title": paper_title[:80],
+                "arxiv_id": arxiv_id,
+                "error": error_message[:200],
+                "paper_index": i,
+                "total_papers": len(papers)
+            })
 
             # Remember processing failures for learning
-            error_pattern = f"processing_error: {paper.get('categories', ['unknown'])[0] if paper.get('categories') else 'unknown'} - {str(e)[:100]}"
+            error_pattern = f"processing_error: {paper.get('categories', ['unknown'])[0] if paper.get('categories') else 'unknown'} - {error_message[:100]}"
             document_processing_agent.remember(error_pattern, importance=0.4)
             continue
 
     logger.info(f"✅ Document processing complete: {processing_stats['successful']}/{processing_stats['total_papers']} successful, {processing_stats['vectors_stored']} vectors stored")
+
+    # Emit SSE event for indexing completion
+    broadcast_agent_event_sync({
+        "event_type": "indexing_complete",
+        "papers_indexed": processing_stats["successful"],
+        "vectors_stored": processing_stats["vectors_stored"],
+        "total": processing_stats["total_papers"],
+        "failed": processing_stats["failed"],
+        "errors": processing_stats["errors"][:5] if processing_stats["errors"] else []  # Send first 5 errors
+    })
 
     # Remember overall processing session
     session_summary = f"domain_processing: {search_metadata.get('domain', 'unknown')} - {processing_stats['successful']}/{processing_stats['total_papers']} papers, {processing_stats['vectors_stored']} vectors stored"

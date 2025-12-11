@@ -17,6 +17,9 @@ interface ChatState {
   // Conversations list
   conversations: Conversation[];
 
+  // Pending question to be submitted when chat loads
+  pendingQuestion: string | null;
+
   // Actions
   addMessage: (message: Message) => void;
   updateMessage: (id: string, updates: Partial<Message>) => void;
@@ -26,6 +29,7 @@ interface ChatState {
   setConversations: (conversations: Conversation[]) => void;
   addConversation: (conversation: Conversation) => void;
   removeConversation: (id: string) => void;
+  setPendingQuestion: (question: string | null) => void;
 }
 
 export const useChatStore = create<ChatState>()(
@@ -35,6 +39,7 @@ export const useChatStore = create<ChatState>()(
       currentConversationId: null,
       messages: [],
       conversations: [],
+      pendingQuestion: null,
 
       // Actions
       addMessage: (message) =>
@@ -67,7 +72,9 @@ export const useChatStore = create<ChatState>()(
           conversations: state.conversations.filter((c) => c.id !== id),
           currentConversationId:
             state.currentConversationId === id ? null : state.currentConversationId
-        }))
+        })),
+
+      setPendingQuestion: (question) => set({ pendingQuestion: question })
     }),
     {
       name: 'chat-storage', // unique name for localStorage key

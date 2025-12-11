@@ -53,7 +53,7 @@ def _llm_chat(prompt: str, system_prompt: str = None, temperature: float = 0.7, 
     return response.choices[0].message.content
 
 
-@agent("content_generator", responds_to=["content_generation_request"], memory=True)
+@agent("content_generator", channel="broadcast", responds_to=["content_generation_request"], memory=True)
 def content_generator_agent(spore) -> Dict[str, Any]:
     """
     I am a content generation specialist who transforms research conversations

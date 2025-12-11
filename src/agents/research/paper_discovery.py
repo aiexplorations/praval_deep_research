@@ -7,6 +7,7 @@ based on past successful searches.
 """
 
 import asyncio
+import concurrent.futures
 import logging
 from typing import Dict, Any, Optional
 from praval import agent, chat, broadcast, Spore
@@ -24,7 +25,7 @@ from processors.arxiv_client import search_arxiv_papers, calculate_paper_relevan
 logger = logging.getLogger(__name__)
 
 
-@agent("paper_searcher", responds_to=["search_request"], memory=True)
+@agent("paper_searcher", channel="broadcast", responds_to=["search_request"], memory=True)
 def paper_discovery_agent(spore: Spore) -> None:
     """
     I am a research paper discovery specialist. I excel at finding relevant
@@ -100,18 +101,25 @@ def paper_discovery_agent(spore: Spore) -> None:
     
     # Execute search with error handling
     try:
-        # Run async search in sync context (Praval agents are sync)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        papers = loop.run_until_complete(
-            search_arxiv_papers(
-                query=optimized_query.strip(),
-                max_results=max_results,
-                domain=domain.lower().replace(" ", "_")
-            )
-        )
-        loop.close()
+        # Run async search in a separate thread to avoid nested event loop issues
+        # Praval agents run within an async context (RabbitMQ consumer)
+        def run_search_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(
+                    search_arxiv_papers(
+                        query=optimized_query.strip(),
+                        max_results=max_results,
+                        domain=domain.lower().replace(" ", "_")
+                    )
+                )
+            finally:
+                loop.close()
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_search_in_thread)
+            papers = future.result(timeout=60)  # 60 second timeout
         
         # Calculate relevance scores and apply quality threshold
         quality_threshold = spore.knowledge.get("quality_threshold", 0.0)
@@ -141,9 +149,12 @@ def paper_discovery_agent(spore: Spore) -> None:
         
         logger.info(f"📄 Found {len(papers)} papers, {len(filtered_papers)} after quality filtering")
 
-        # Prepare broadcast payload - flatten structure for document processor
+        # Prepare broadcast payload with search_results type
+        # NOTE: We use "search_results" NOT "papers_found" to avoid auto-triggering
+        # the document_processor agent. Indexing should only happen when user
+        # explicitly selects papers via the /index endpoint.
         broadcast_payload = {
-            "type": "papers_found",
+            "type": "search_results",
             "papers": filtered_papers,
             "original_query": query,
             "optimized_query": optimized_query,
@@ -156,15 +167,15 @@ def paper_discovery_agent(spore: Spore) -> None:
             }
         }
 
-        logger.info(f"📡 BROADCASTING papers_found event")
+        logger.info(f"📡 BROADCASTING search_results event")
         logger.info(f"   Papers count: {len(filtered_papers)}")
-        logger.info(f"   Broadcast type: papers_found")
+        logger.info(f"   Broadcast type: search_results (NOT papers_found - no auto-indexing)")
 
         # Broadcast results via Praval's broadcast() function
         # Message routing is handled by responds_to filtering, not channels
         broadcast(broadcast_payload)
 
-        logger.info(f"✅ BROADCAST COMPLETE - papers_found sent to all agents")
+        logger.info(f"✅ BROADCAST COMPLETE - search_results sent (indexing requires explicit user action)")
         logger.info("=" * 80)
         
     except ArXivAPIError as e:
@@ -202,12 +213,13 @@ AGENT_METADATA = {
     "domain": "research",
     "capabilities": [
         "academic paper search",
-        "query optimization", 
+        "query optimization",
         "relevance scoring",
         "quality filtering",
         "memory-driven learning"
     ],
     "responds_to": ["search_request"],
+    "broadcasts": ["search_results"],  # NOT papers_found - indexing requires explicit user action
     "memory_enabled": True,
     "learning_focus": "successful search patterns and domain expertise"
 }

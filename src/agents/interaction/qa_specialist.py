@@ -4,6 +4,11 @@ Q&A Specialist Agent - Interaction Domain.
 I am a research Q&A expert who provides comprehensive, accurate answers
 about research papers using retrieved context and accumulated knowledge
 to deliver personalized, insightful responses.
+
+Two-Tier Retrieval Strategy (Context Engineering):
+1. Fast Path: Search paper_summaries first for quick relevance check
+2. Deep Path: For relevant papers, search main collection for detailed chunks
+3. Expanded Context: Also search linked_papers for broader context
 """
 
 import logging
@@ -13,7 +18,7 @@ from praval import agent, chat, broadcast
 from praval import Spore
 
 from agentic_research.core.config import get_settings
-from agentic_research.storage.qdrant_client import QdrantClientWrapper
+from agentic_research.storage.qdrant_client import QdrantClientWrapper, CollectionType
 from agentic_research.storage.embeddings import EmbeddingsGenerator
 
 
@@ -21,7 +26,83 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-@agent("qa_specialist", responds_to=["user_query", "summaries_complete"], memory=True)
+def _two_tier_retrieval(
+    qdrant_client: QdrantClientWrapper,
+    query_embedding: List[float],
+    top_k_summaries: int = 10,
+    top_k_chunks: int = 5,
+    summary_threshold: float = 0.6,
+    chunk_threshold: float = 0.7
+) -> Dict[str, Any]:
+    """
+    Implement two-tier retrieval for context engineering.
+
+    Tier 1 (Fast): Search summaries to identify relevant papers
+    Tier 2 (Deep): For top papers, retrieve detailed chunks
+    Tier 3 (Expanded): Search linked papers for broader context
+
+    Returns:
+        Dictionary with summary_matches, chunk_matches, linked_matches
+    """
+    results = {
+        "summary_matches": [],
+        "chunk_matches": [],
+        "linked_matches": [],
+        "relevant_paper_ids": set()
+    }
+
+    # Tier 1: Fast path - search summaries
+    try:
+        summary_results = qdrant_client.search_summaries(
+            query_vector=query_embedding,
+            limit=top_k_summaries,
+            score_threshold=summary_threshold
+        )
+
+        for summary in summary_results:
+            results["summary_matches"].append(summary)
+            if summary.get("paper_id"):
+                results["relevant_paper_ids"].add(summary["paper_id"])
+
+        logger.debug(f"Tier 1: Found {len(summary_results)} relevant papers via summaries")
+    except Exception as e:
+        logger.warning(f"Summary search failed, falling back to chunks only: {e}")
+
+    # Tier 2: Deep path - search main collection for chunks
+    try:
+        chunk_results = qdrant_client.search_similar(
+            query_vector=query_embedding,
+            limit=top_k_chunks,
+            score_threshold=chunk_threshold
+        )
+
+        for chunk in chunk_results:
+            results["chunk_matches"].append(chunk)
+            paper_id = chunk.get("payload", {}).get("paper_id")
+            if paper_id:
+                results["relevant_paper_ids"].add(paper_id)
+
+        logger.debug(f"Tier 2: Found {len(chunk_results)} relevant chunks")
+    except Exception as e:
+        logger.warning(f"Chunk search failed: {e}")
+
+    # Tier 3: Expanded context - search linked papers
+    try:
+        linked_results = qdrant_client.search_linked_papers(
+            query_vector=query_embedding,
+            limit=3,  # Fewer linked results to avoid overwhelming
+            score_threshold=chunk_threshold
+        )
+
+        results["linked_matches"] = linked_results
+        logger.debug(f"Tier 3: Found {len(linked_results)} relevant linked paper chunks")
+    except Exception as e:
+        logger.debug(f"Linked papers search skipped or failed: {e}")
+
+    return results
+
+
+@agent("qa_specialist", channel="broadcast", responds_to=["user_query", "summaries_complete"], memory=True)
 def qa_specialist_agent(spore: Spore) -> None:
     """
     I am a research Q&A expert who provides comprehensive, accurate answers
@@ -110,25 +191,45 @@ def qa_specialist_agent(spore: Spore) -> None:
         logger.debug(f"Generating query embedding for: {search_query}")
         query_embedding = embeddings_gen.generate_embedding(search_query)
 
-        # STEP 2: Search Qdrant for relevant chunks
-        logger.debug("Searching Qdrant for relevant paper chunks...")
-        search_results = qdrant_client.search_similar(
-            query_vector=query_embedding,
-            limit=5,
-            score_threshold=0.7
+        # STEP 2: Two-Tier Retrieval (Context Engineering)
+        logger.debug("Performing two-tier retrieval...")
+        retrieval_results = _two_tier_retrieval(
+            qdrant_client=qdrant_client,
+            query_embedding=query_embedding,
+            top_k_summaries=10,
+            top_k_chunks=5,
+            summary_threshold=0.6,
+            chunk_threshold=0.7
         )
 
-        # STEP 3: Build context from retrieved chunks
+        # Collect all search results
+        search_results = retrieval_results["chunk_matches"]
+        summary_matches = retrieval_results["summary_matches"]
+        linked_matches = retrieval_results["linked_matches"]
+
+        # STEP 3: Build context from retrieved chunks and summaries
         context_pieces = []
         sources = []
+        summary_context = []
 
+        # Add paper summaries for high-level context (from Tier 1)
+        for summary in summary_matches[:5]:
+            summary_context.append({
+                "title": summary.get("title", "Unknown"),
+                "one_line": summary.get("one_line", ""),
+                "paper_id": summary.get("paper_id", ""),
+                "relevance": summary.get("score", 0.0)
+            })
+
+        # Add main chunks (from Tier 2)
         for result in search_results:
             payload = result["payload"]
 
             context_pieces.append({
                 "content": payload.get("chunk_text", ""),
                 "source": payload.get("title", "Unknown Paper"),
-                "relevance": result["score"]
+                "relevance": result["score"],
+                "is_linked": False
             })
 
             # Build source citation
@@ -137,26 +238,79 @@ def qa_specialist_agent(spore: Spore) -> None:
                 "paper_id": payload.get("paper_id", ""),
                 "chunk_index": payload.get("chunk_index", 0),
                 "relevance_score": result["score"],
-                "excerpt": payload.get("chunk_text", "")[:200]  # First 200 chars
+                "excerpt": payload.get("chunk_text", "")[:200],
+                "is_linked_paper": False
             }
 
-            # Avoid duplicate sources (same paper, different chunks)
+            # Avoid duplicate sources
             if not any(s["paper_id"] == source_citation["paper_id"] and
                       s["chunk_index"] == source_citation["chunk_index"]
                       for s in sources):
                 sources.append(source_citation)
 
-        logger.info(f"Retrieved {len(context_pieces)} relevant chunks from {len(sources)} papers")
+        # Add linked paper chunks (from Tier 3 - expanded context)
+        for result in linked_matches:
+            payload = result.get("payload", {})
+
+            context_pieces.append({
+                "content": payload.get("chunk_text", ""),
+                "source": f"[Linked] {payload.get('title', 'Unknown Paper')}",
+                "relevance": result.get("score", 0.0),
+                "is_linked": True,
+                "source_paper_id": payload.get("source_paper_id", "")
+            })
+
+            # Build linked source citation
+            source_citation = {
+                "title": payload.get("title", "Unknown Paper"),
+                "paper_id": payload.get("paper_id", ""),
+                "chunk_index": payload.get("chunk_index", 0),
+                "relevance_score": result.get("score", 0.0),
+                "excerpt": payload.get("chunk_text", "")[:200],
+                "is_linked_paper": True,
+                "source_paper_id": payload.get("source_paper_id", "")
+            }
+
+            # Avoid duplicate sources
+            if not any(s["paper_id"] == source_citation["paper_id"] and
+                      s["chunk_index"] == source_citation["chunk_index"]
+                      for s in sources):
+                sources.append(source_citation)
+
+        logger.info(f"Two-tier retrieval: {len(summary_matches)} summaries, {len(search_results)} chunks, {len(linked_matches)} linked chunks")
 
         # STEP 4: Generate personalized response with retrieved context
         # Build context string for LLM
+
+        # First, add high-level paper summaries for quick context
+        summary_str = ""
+        if summary_context:
+            summary_str = "\n".join([
+                f"- {s['title']}: {s['one_line']}"
+                for s in summary_context[:5]
+            ])
+
+        # Then, add detailed chunks
         context_str = ""
         if context_pieces:
-            context_str = "\n\n".join([
-                f"[Relevance: {c['relevance']:.2f}] From '{c['source']}':\n{c['content'][:800]}..."
-                for c in context_pieces[:3]  # Top 3 most relevant
-            ])
-        else:
+            # Separate main and linked papers
+            main_chunks = [c for c in context_pieces if not c.get("is_linked", False)]
+            linked_chunks = [c for c in context_pieces if c.get("is_linked", False)]
+
+            if main_chunks:
+                context_str = "\n\n".join([
+                    f"[Relevance: {c['relevance']:.2f}] From '{c['source']}':\n{c['content'][:800]}..."
+                    for c in main_chunks[:3]
+                ])
+
+            if linked_chunks:
+                linked_context = "\n\n".join([
+                    f"[Linked Paper - Relevance: {c['relevance']:.2f}] From '{c['source']}':\n{c['content'][:500]}..."
+                    for c in linked_chunks[:2]
+                ])
+                context_str += f"\n\n--- Related Work (from cited papers) ---\n{linked_context}"
+
+        if not context_str:
             context_str = "No directly relevant research papers found in the database."
 
         qa_prompt = f"""
@@ -164,7 +318,10 @@ def qa_specialist_agent(spore: Spore) -> None:
 
         Question: {user_query}
 
-        Retrieved Research Context:
+        Relevant Papers Overview (summaries):
+        {summary_str if summary_str else "No paper summaries available"}
+
+        Detailed Research Context:
         {context_str}
 
         User's Research Profile:
@@ -176,10 +333,11 @@ def qa_specialist_agent(spore: Spore) -> None:
         Provide a comprehensive answer that:
         1. Directly addresses the question using the retrieved research context
         2. Cites specific papers and findings from the context
-        3. Acknowledges any limitations if context is insufficient
-        4. Considers the user's apparent research interests
-        5. Maintains academic rigor while being accessible
-        6. Provides actionable insights for researchers
+        3. When relevant, mention insights from linked/cited papers (marked as [Linked])
+        4. Acknowledges any limitations if context is insufficient
+        5. Considers the user's apparent research interests
+        6. Maintains academic rigor while being accessible
+        7. Provides actionable insights for researchers
 
         If the retrieved context doesn't fully answer the question, be honest about
         limitations and suggest how to get better information.
@@ -280,7 +438,14 @@ def qa_specialist_agent(spore: Spore) -> None:
                     "personalization_applied": bool(user_interests),
                     "conversation_length": len(conversation_context),
                     "similar_questions_found": len(similar_questions),
-                    "vector_search_performed": True
+                    "vector_search_performed": True,
+                    # Two-tier retrieval stats
+                    "two_tier_retrieval": {
+                        "summaries_found": len(summary_matches),
+                        "main_chunks_found": len(search_results),
+                        "linked_chunks_found": len(linked_matches),
+                        "relevant_papers_identified": len(retrieval_results.get("relevant_paper_ids", set()))
+                    }
                 }
             }
         })
@@ -345,10 +510,12 @@ AGENT_METADATA = {
     "identity": "research Q&A expert",
     "domain": "interaction",
     "capabilities": [
+        "two-tier retrieval (summaries -> chunks)",
         "semantic vector search",
         "contextual question answering",
         "personalized responses",
         "source citation with paper references",
+        "linked papers integration",
         "follow-up generation",
         "research guidance",
         "confidence scoring"
@@ -357,5 +524,14 @@ AGENT_METADATA = {
     "broadcasts": ["qa_response", "qa_ready", "qa_error"],
     "memory_enabled": True,
     "learning_focus": "user interests and successful Q&A patterns",
-    "storage_integrations": ["Qdrant", "OpenAI Embeddings"]
+    "storage_integrations": [
+        "Qdrant (research_papers collection)",
+        "Qdrant (paper_summaries collection)",
+        "Qdrant (linked_papers collection)",
+        "OpenAI Embeddings"
+    ],
+    "context_engineering": {
+        "two_tier_retrieval": True,
+        "linked_papers_integration": True
+    }
 }
