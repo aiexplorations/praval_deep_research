@@ -24,7 +24,7 @@ export default function Chat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const { currentConversationId, setCurrentConversation, messages, addMessage, clearMessages } = useChatStore();
+  const { currentConversationId, setCurrentConversation, messages, addMessage, clearMessages, pendingQuestion, setPendingQuestion } = useChatStore();
 
   // Load conversations list
   const { data: conversationsData, refetch: refetchConversations } = useQuery({
@@ -121,15 +121,15 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Auto-load most recent conversation on initial page load
+  // Auto-load most recent conversation on initial page load (only if no pending question)
   useEffect(() => {
-    if (conversationsData && conversationsData.length > 0 && !currentConversationId && messages.length === 0) {
+    if (conversationsData && conversationsData.length > 0 && !currentConversationId && messages.length === 0 && !pendingQuestion) {
       // Load the most recent conversation
       const mostRecent = conversationsData[0];
       console.log('Auto-loading most recent conversation:', mostRecent.id);
       loadConversationMutation.mutate(mostRecent.id);
     }
-  }, [conversationsData, currentConversationId, messages.length]);
+  }, [conversationsData, currentConversationId, messages.length, pendingQuestion]);
 
   // Q&A mutation
   const askMutation = useMutation({
@@ -167,6 +167,35 @@ export default function Chat() {
       addMessage(errorMessage);
     }
   });
+
+  // Handle pending question from other pages (e.g., "Summarize in Chat")
+  useEffect(() => {
+    if (pendingQuestion && currentConversationId && !askMutation.isPending) {
+      console.log('Processing pending question:', pendingQuestion);
+      const questionToAsk = pendingQuestion;
+
+      // Clear pending question first to prevent re-triggering
+      setPendingQuestion(null);
+
+      // Add user message to UI
+      const userMessage: Message = {
+        id: `msg-${Date.now()}-user`,
+        role: 'user',
+        content: questionToAsk,
+        timestamp: new Date().toISOString(),
+        thread_id: 0,
+        position: messages.length + 1
+      };
+      addMessage(userMessage);
+
+      // Send question to API
+      askMutation.mutate({
+        question: questionToAsk,
+        include_sources: true,
+        conversation_id: currentConversationId
+      });
+    }
+  }, [pendingQuestion, currentConversationId, askMutation.isPending]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

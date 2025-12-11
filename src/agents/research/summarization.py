@@ -14,7 +14,7 @@ from praval import Spore
 logger = logging.getLogger(__name__)
 
 
-@agent("summarizer", responds_to=["semantic_analysis_complete"], memory=True)
+@agent("summarizer", channel="broadcast", responds_to=["semantic_analysis_complete"], memory=True)
 def summarization_agent(spore: Spore) -> None:
     """
     I am a summarization specialist who creates coherent, comprehensive summaries 

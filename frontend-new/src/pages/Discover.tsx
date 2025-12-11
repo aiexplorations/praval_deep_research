@@ -5,10 +5,11 @@
  */
 
 import { useState, useRef } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../services/api/client';
 import type { Paper, PaperSearchRequest } from '../types';
 import ResearchInsights from '../components/insights/ResearchInsights';
+import IndexingStatus from '../components/IndexingStatus';
 
 export default function Discover() {
   const [query, setQuery] = useState('');
@@ -17,6 +18,7 @@ export default function Discover() {
   const [searchResults, setSearchResults] = useState<Paper[]>([]);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
 
   // Search mutation
   const searchMutation = useMutation({
@@ -282,6 +284,16 @@ export default function Discover() {
           <ResearchInsights onTopicClick={handleInsightClick} />
         </div>
       </div>
+
+      {/* Indexing Status Overlay */}
+      <IndexingStatus
+        onComplete={() => {
+          // Refresh knowledge base data when indexing completes
+          queryClient.invalidateQueries({ queryKey: ['knowledge-base-papers'] });
+          queryClient.invalidateQueries({ queryKey: ['knowledge-base-stats'] });
+          queryClient.invalidateQueries({ queryKey: ['research-insights'] });
+        }}
+      />
     </div>
   );
 }

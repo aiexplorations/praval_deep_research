@@ -72,48 +72,51 @@ class ArXivClient:
     def _build_search_query(self, query: str, domain: Optional[str] = None) -> str:
         """
         Build ArXiv API search query with domain filtering.
-        
+
         Args:
             query: Search terms
             domain: Research domain for category filtering
-            
+
         Returns:
             Formatted search query for ArXiv API
         """
         # Domain to ArXiv category mapping
         domain_categories = {
             "computer_science": "cs.*",
-            "physics": "physics.*", 
+            "physics": "physics.*",
             "mathematics": "math.*",
             "artificial_intelligence": "cs.AI",
             "machine_learning": "cs.LG OR cs.AI",
             "biology": "q-bio.*",
             "chemistry": "physics.chem-ph"
         }
-        
-        # Escape query for URL
-        escaped_query = quote_plus(query)
-        
+
         # Check if query already contains field prefixes (advanced query)
-        # We check the original query for prefixes, as escaped_query has them encoded
         is_advanced = any(prefix in query for prefix in ["ti:", "au:", "abs:", "cat:", "all:", "id:"])
-        
+
         if is_advanced:
-            # Don't prepend 'all:', trust the user's field specifiers
-            search_query = escaped_query
+            # Don't modify, trust the user's field specifiers
+            search_query = quote_plus(query)
         else:
-            # Default to searching all fields
-            search_query = f"all:{escaped_query}"
-        
+            # For multi-word queries, wrap in quotes for phrase matching
+            # This ensures "attention is all you need" searches as a phrase
+            query_stripped = query.strip()
+            if ' ' in query_stripped:
+                # Phrase search: wrap in double quotes for exact phrase matching
+                # Also do a title search (ti:) which is more effective for paper names
+                phrase_query = f'"{query_stripped}"'
+                # Search in title first (most relevant), then all fields as fallback
+                search_query = f"ti:{quote_plus(phrase_query)} OR all:{quote_plus(phrase_query)}"
+            else:
+                # Single word: just search all fields
+                search_query = f"all:{quote_plus(query_stripped)}"
+
         # Add category filter if domain specified
         if domain and domain.lower() in domain_categories:
             category = domain_categories[domain.lower()]
-            # Append AND if it's not already in the query
             if "cat:" not in query:
-                search_query = f"{search_query} AND cat:{category}"
-            elif not is_advanced: # Only force category for basic queries if ambiguous
-                 search_query = f"{search_query} AND cat:{category}"
-            
+                search_query = f"({search_query}) AND cat:{category}"
+
         return search_query
     
     def _parse_arxiv_response(self, xml_content: str) -> List[Dict[str, Any]]:
@@ -357,37 +360,56 @@ async def get_paper_details(arxiv_id: str) -> Dict[str, Any]:
 def calculate_paper_relevance(paper: Dict[str, Any], query: str) -> float:
     """
     Calculate relevance score for a paper based on query.
-    
+
+    Prioritizes exact title matches over partial word matches.
+
     Args:
         paper: Paper dictionary
         query: Original search query
-        
+
     Returns:
         Relevance score between 0.0 and 1.0
     """
-    query_lower = query.lower()
-    score = 0.0
-    
-    # Title relevance (40% weight)
+    query_lower = query.lower().strip()
     title = paper.get('title', '').lower()
-    title_matches = sum(1 for term in query_lower.split() if term in title)
-    if query_lower.split():
-        title_score = title_matches / len(query_lower.split())
-        score += title_score * 0.4
-    
-    # Abstract relevance (50% weight)  
+    # Normalize whitespace in title (arXiv titles can have newlines)
+    title_normalized = ' '.join(title.split())
+
+    # EXACT TITLE MATCH - highest priority (100% score)
+    if query_lower == title_normalized:
+        return 1.0
+
+    # TITLE CONTAINS EXACT QUERY - very high priority (95% score)
+    if query_lower in title_normalized:
+        return 0.95
+
+    # TITLE STARTS WITH QUERY - high priority (90% score)
+    if title_normalized.startswith(query_lower):
+        return 0.90
+
+    # Standard word-based scoring for partial matches
+    score = 0.0
+    query_terms = query_lower.split()
+
+    if not query_terms:
+        return 0.0
+
+    # Title word matches (50% weight - increased from 40%)
+    title_matches = sum(1 for term in query_terms if term in title_normalized)
+    title_score = title_matches / len(query_terms)
+    score += title_score * 0.5
+
+    # Abstract relevance (40% weight - decreased from 50%)
     abstract = paper.get('abstract', '').lower()
-    abstract_matches = sum(1 for term in query_lower.split() if term in abstract)
-    if query_lower.split():
-        abstract_score = abstract_matches / len(query_lower.split())
-        score += abstract_score * 0.5
-    
+    abstract_matches = sum(1 for term in query_terms if term in abstract)
+    abstract_score = abstract_matches / len(query_terms)
+    score += abstract_score * 0.4
+
     # Category relevance (10% weight)
     categories = [cat.lower() for cat in paper.get('categories', [])]
-    category_matches = sum(1 for term in query_lower.split() 
+    category_matches = sum(1 for term in query_terms
                           if any(term in cat for cat in categories))
-    if query_lower.split():
-        category_score = category_matches / len(query_lower.split())
-        score += category_score * 0.1
-    
+    category_score = category_matches / len(query_terms)
+    score += category_score * 0.1
+
     return min(score, 1.0)

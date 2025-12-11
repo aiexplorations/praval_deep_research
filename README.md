@@ -29,8 +29,8 @@ Built with the [Praval Agentic Framework](https://pravalagents.com) - demonstrat
 Praval Deep Research is a **local-first**, privacy-focused research assistant that helps you discover, analyze, and understand academic papers from ArXiv. All your research data stays on your machine - papers, embeddings, conversations, and insights are stored locally. LLM processing uses OpenAI API (local model support with Ollama planned for future releases).
 
 <div align="center">
-<img src="img/pdr_01.png" alt="Praval Deep Research Interface" width="800"/>
-<p><em>Modern React interface with Discover, Chat, and Knowledge Base features</em></p>
+<img src="img/pdr_discover_1.png" alt="Praval Deep Research - Discover Papers" width="800"/>
+<p><em>Discover page: Search ArXiv, select papers, and index to your knowledge base</em></p>
 </div>
 
 ### Core Philosophy
@@ -68,8 +68,13 @@ Praval Deep Research is a **local-first**, privacy-focused research assistant th
 ### 💬 Intelligent Conversations
 
 <div align="center">
-<img src="img/pdr_02.png" alt="Chat Interface with History" width="800"/>
-<p><em>Persistent chat history with auto-generated conversation titles</em></p>
+<img src="img/pdr_chat_1.png" alt="Chat Interface with Q&A" width="800"/>
+<p><em>Research Chat: Ask questions about your papers with source citations</em></p>
+</div>
+
+<div align="center">
+<img src="img/pdr_chat_2.png" alt="Generate Content Modal" width="800"/>
+<p><em>Generate Content: Create Twitter threads or blog posts from your research</em></p>
 </div>
 
 - **Chat History**: All conversations automatically saved with PostgreSQL (persistent relational storage)
@@ -83,8 +88,13 @@ Praval Deep Research is a **local-first**, privacy-focused research assistant th
 ### 📖 Knowledge Base Management
 
 <div align="center">
-<img src="img/pdr_03.png" alt="Knowledge Base with PDF Viewer" width="800"/>
-<p><em>Comprehensive knowledge base with inline PDF viewing</em></p>
+<img src="img/pdr_kb_1.png" alt="Knowledge Base Management" width="800"/>
+<p><em>Knowledge Base: 134 papers indexed with search, filters, and sorting</em></p>
+</div>
+
+<div align="center">
+<img src="img/pdr_kb_2.png" alt="Related Papers Modal" width="800"/>
+<p><em>Find Related Papers: Extract citations and discover related ArXiv papers</em></p>
 </div>
 
 - **Paper Catalog**: Sortable table of all indexed papers
@@ -92,6 +102,15 @@ Praval Deep Research is a **local-first**, privacy-focused research assistant th
 - **PDF Access**: View any indexed paper with one click
 - **Search & Filter**: Find specific papers in your collection
 - **Bulk Operations**: Clear entire knowledge base when needed
+- **Find Related Papers**: Extract citations from any paper and discover related ArXiv papers
+- **Summarize in Chat**: One-click workflow to summarize any paper in a dedicated conversation
+
+### 🔗 Citation Discovery (NEW)
+- **Find Related Papers**: Click "Related" on any paper to extract its citations
+- **LLM-Powered Extraction**: Uses GPT-4o-mini to identify citations from PDF references section
+- **ArXiv Search**: Automatically searches ArXiv for cited papers
+- **Smart Indexing**: Select which related papers to add to your knowledge base
+- **Already Indexed Detection**: Shows which cited papers are already in your KB
 
 ### 🤖 Praval Agent Architecture
 Six specialized agents working autonomously:
@@ -118,6 +137,12 @@ Each agent has:
 - **Dark Mode Ready**: Infrastructure for theme switching
 
 ### 🔮 Proactive Research Insights (NEW)
+
+<div align="center">
+<img src="img/pdr_discover_insights_1.png" alt="Research Insights" width="800"/>
+<p><em>Research Insights: AI-identified research areas with related papers and quick actions</em></p>
+</div>
+
 - **Interactive Topic Discovery**: Click trending topics to instantly search and view papers
 - **Research Area Clustering**: AI-powered identification of your research themes
 - **Trending Topics**: Automatically extracted from your indexed papers
@@ -524,7 +549,7 @@ This project showcases the power of the [Praval Agentic Framework](https://prava
 
 ## 🗺️ Roadmap
 
-### Current (v1.0)
+### Current (v1.1)
 - ✅ ArXiv paper search and indexing
 - ✅ Semantic Q&A over indexed papers
 - ✅ Knowledge base management with PDF viewing
@@ -533,10 +558,13 @@ This project showcases the power of the [Praval Agentic Framework](https://prava
 - ✅ Modern React + TypeScript frontend
 - ✅ Full Docker containerization
 - ✅ 6 specialized Praval agents with memory
+- ✅ Find Related Papers: Citation extraction and ArXiv discovery
+- ✅ Summarize in Chat: One-click paper summaries
+- ✅ Proactive Research Insights with clickable topics
+- ✅ Advanced KB filters (search, category, source, sort)
 
 ### In Progress
 - 🔄 Voice interface for hands-free research
-- 🔄 Advanced filtering and search in knowledge base
 - 🔄 Export conversations and research notes
 
 ### Planned

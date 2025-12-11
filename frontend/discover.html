@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Praval Deep Research - Discover</title>
+    <link rel="icon" type="image/png" href="assets/praval_deep_research_logo.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .area-card {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .area-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        .area-card.expanded {
+            background-color: #f0f9ff;
+            border-color: #3b82f6;
+        }
+        .topic-chip {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .topic-chip:hover {
+            transform: scale(1.05);
+        }
+        .loading-skeleton {
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+        }
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .papers-panel {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        .papers-panel.expanded {
+            max-height: 2000px;
+        }
+        .paper-mini-card {
+            border-left: 3px solid #3b82f6;
+        }
+        .gap-card {
+            border-left: 4px solid #f59e0b;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Header -->
+    <header class="bg-white shadow-sm border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <img src="assets/praval_deep_research_logo.png" alt="Praval Deep Research Logo" class="h-16 w-16">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-900">Discover Research</h1>
+                        <p class="text-sm text-gray-600 mt-1">Explore your knowledge base by research areas and topics</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <a href="knowledge-base.html" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+                        📚 Knowledge Base
+                    </a>
+                    <a href="index.html" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                        ← Back to Search
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        <!-- Loading State -->
+        <div id="loading-state" class="space-y-6">
+            <div class="loading-skeleton h-8 w-48 rounded"></div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div class="loading-skeleton h-40 rounded-lg"></div>
+                <div class="loading-skeleton h-40 rounded-lg"></div>
+                <div class="loading-skeleton h-40 rounded-lg"></div>
+            </div>
+        </div>
+
+        <!-- Empty State -->
+        <div id="empty-state" class="hidden text-center py-16">
+            <div class="text-6xl mb-4">📭</div>
+            <h2 class="text-2xl font-bold text-gray-900 mb-2">No Research Data Yet</h2>
+            <p class="text-gray-600 mb-6">Index some papers to start exploring your research landscape.</p>
+            <a href="index.html" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                Search & Index Papers
+            </a>
+        </div>
+
+        <!-- Content Container -->
+        <div id="content-container" class="hidden space-y-8">
+
+            <!-- KB Statistics -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold text-gray-900">Knowledge Base Overview</h2>
+                        <p class="text-sm text-gray-600 mt-1">
+                            <span id="stat-papers">0</span> papers indexed across <span id="stat-categories">0</span> categories
+                        </p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span id="generation-time" class="text-xs text-gray-500"></span>
+                        <button onclick="refreshInsights()" class="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors">
+                            🔄 Refresh Insights
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Research Areas Section -->
+            <section>
+                <h2 class="text-xl font-bold text-gray-900 mb-4">Research Areas</h2>
+                <p class="text-gray-600 mb-4">Click on an area to see related papers from your knowledge base.</p>
+                <div id="research-areas" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <!-- Area cards will be inserted here -->
+                </div>
+            </section>
+
+            <!-- Trending Topics Section -->
+            <section>
+                <h2 class="text-xl font-bold text-gray-900 mb-4">Trending Topics</h2>
+                <div id="trending-topics" class="flex flex-wrap gap-2">
+                    <!-- Topic chips will be inserted here -->
+                </div>
+            </section>
+
+            <!-- Research Gaps Section -->
+            <section>
+                <h2 class="text-xl font-bold text-gray-900 mb-4">Research Gaps</h2>
+                <p class="text-gray-600 mb-4">Opportunities for further exploration based on your current research.</p>
+                <div id="research-gaps" class="space-y-4">
+                    <!-- Gap cards will be inserted here -->
+                </div>
+            </section>
+
+            <!-- Next Steps Section -->
+            <section>
+                <h2 class="text-xl font-bold text-gray-900 mb-4">Suggested Next Steps</h2>
+                <div id="next-steps" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Step cards will be inserted here -->
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <script src="discover-app.js"></script>
+</body>
+</html>

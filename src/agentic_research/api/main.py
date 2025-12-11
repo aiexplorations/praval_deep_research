@@ -12,10 +12,18 @@ This module creates a production-ready FastAPI application with:
 
 import asyncio
 import json
+import logging
 import time
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 from fastapi import FastAPI, HTTPException, Request, status
+
+# Configure standard library logging FIRST before other imports
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -26,7 +34,7 @@ from prometheus_client import Counter, Histogram, Gauge
 import uvicorn
 
 from .routes import health_router, research_router
-from .routes.sse import router as sse_router
+from .routes.sse import router as sse_router, set_event_loop
 from .models.research import ErrorResponse
 from ..core.config import get_settings
 # Removed old research_agent import - now using distributed Praval agents
@@ -91,6 +99,10 @@ async def lifespan(app: FastAPI):
         # Initialize settings
         settings = get_settings()
         logger.info("Initializing Praval research agents")
+
+        # Set event loop for SSE sync-to-async bridging
+        set_event_loop(asyncio.get_event_loop())
+        logger.info("SSE event loop configured for agent notifications")
 
         # Initialize database (create tables if not exist)
         logger.info("Initializing PostgreSQL database")

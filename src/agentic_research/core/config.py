@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     QDRANT_URL: str = Field(default="http://localhost:6333", env="QDRANT_URL")
     QDRANT_API_KEY: Optional[str] = Field(default=None, env="QDRANT_API_KEY")
     QDRANT_COLLECTION_NAME: str = Field(default="research_vectors", env="QDRANT_COLLECTION_NAME")
+    # Context Engineering Collections
+    QDRANT_SUMMARIES_COLLECTION: str = Field(default="paper_summaries", env="QDRANT_SUMMARIES_COLLECTION")
+    QDRANT_LINKED_PAPERS_COLLECTION: str = Field(default="linked_papers", env="QDRANT_LINKED_PAPERS_COLLECTION")
     
     MINIO_ENDPOINT: str = Field(default="localhost:9000", env="MINIO_ENDPOINT")
     MINIO_EXTERNAL_ENDPOINT: str = Field(default="localhost:9000", env="MINIO_EXTERNAL_ENDPOINT")

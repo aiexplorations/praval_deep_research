@@ -116,9 +116,44 @@ class APIClient {
     return response.data;
   }
 
-  async listPapers(): Promise<{ papers: Paper[] }> {
-    const response = await this.client.get<{ papers: Paper[] }>(
-      '/research/knowledge-base/papers'
+  async listPapers(params?: {
+    search?: string;
+    category?: string;
+    source?: 'all' | 'kb' | 'linked';
+    sort?: 'title' | 'date' | 'date_added' | 'chunks';
+    sort_order?: 'asc' | 'desc';
+    page?: number;
+    page_size?: number;
+  }): Promise<{
+    papers: Paper[];
+    total_papers: number;
+    total_vectors: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+    available_categories: string[];
+    status: string;
+  }> {
+    const response = await this.client.get('/research/knowledge-base/papers', { params });
+    return response.data;
+  }
+
+  async getAreaPapers(areaName: string, limit: number = 10): Promise<{
+    area_name: string;
+    papers: Array<{
+      paper_id: string;
+      title: string;
+      authors: string[];
+      abstract: string;
+      categories: string[];
+      relevance_score: number;
+    }>;
+    total_found: number;
+    status: string;
+  }> {
+    const response = await this.client.get(
+      `/research/areas/${encodeURIComponent(areaName)}/papers`,
+      { params: { limit } }
     );
     return response.data;
   }
@@ -138,6 +173,33 @@ class APIClient {
   getPaperPdfUrl(paperId: string): string {
     // Return direct API endpoint for PDF viewing
     return `/api/research/knowledge-base/papers/${paperId}/pdf`;
+  }
+
+  // Related Papers (Citation Extraction)
+  async getRelatedPapers(paperId: string): Promise<{
+    paper_id: string;
+    paper_title: string;
+    related_papers: Array<{
+      arxiv_id: string;
+      title: string;
+      authors: string[];
+      abstract: string;
+      published_date: string | null;
+      categories: string[];
+      url: string;
+      relevance: string;
+      source_paper_id: string;
+      source_paper_title: string;
+      already_indexed: boolean;
+    }>;
+    citations_extracted: number;
+    papers_found: number;
+    message: string;
+  }> {
+    const response = await this.client.get(
+      `/research/knowledge-base/papers/${paperId}/related`
+    );
+    return response.data;
   }
 
   // Proactive Research Insights
@@ -227,6 +289,24 @@ class APIClient {
   async updateConversationTitle(id: string, title: string): Promise<{ message: string }> {
     const response = await this.client.put(`/research/conversations/${id}`, { title });
     return response.data;
+  }
+
+  /**
+   * Find a conversation by exact title match, or create one if not found.
+   * Returns the conversation ID and whether it was newly created.
+   */
+  async findOrCreateConversation(title: string): Promise<{ id: string; created: boolean }> {
+    // First, list all conversations to find a matching title
+    const { conversations } = await this.listConversations();
+    const existing = conversations.find(c => c.title === title);
+
+    if (existing) {
+      return { id: existing.id, created: false };
+    }
+
+    // Create new conversation with the title
+    const newConversation = await this.createConversation(title);
+    return { id: newConversation.id, created: true };
   }
 
   // Thread-Based Branching Operations

@@ -13,6 +13,132 @@ let messageCounter = 0;
 let currentConversationId = null;
 let currentMessages = [];  // Track messages with their metadata for branching
 
+// Toast notification counter
+let toastCounter = 0;
+
+// Indexing state tracking
+let indexingState = {
+    isActive: false,
+    totalPapers: 0,
+    processedPapers: 0,
+    currentPaper: null,
+    stage: 'idle'
+};
+
+// ============================================
+// TOAST NOTIFICATION SYSTEM
+// ============================================
+
+/**
+ * Show a toast notification
+ * @param {string} type - 'success', 'info', 'warning', 'error'
+ * @param {string} title - Short title for the toast
+ * @param {string} message - Detailed message
+ * @param {number} duration - Auto-dismiss duration in ms (0 for no auto-dismiss)
+ */
+function showToast(type, title, message, duration = 5000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toastId = `toast-${++toastCounter}`;
+
+    const icons = {
+        success: `<svg class="toast-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+        </svg>`,
+        info: `<svg class="toast-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>`,
+        warning: `<svg class="toast-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>`,
+        error: `<svg class="toast-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>`
+    };
+
+    const toastHtml = `
+        <div id="${toastId}" class="toast toast-${type}">
+            ${icons[type] || icons.info}
+            <div class="toast-content">
+                <div class="toast-title">${escapeHtml(title)}</div>
+                ${message ? `<div class="toast-message">${escapeHtml(message)}</div>` : ''}
+            </div>
+            <span class="toast-close" onclick="dismissToast('${toastId}')">&times;</span>
+        </div>
+    `;
+
+    container.insertAdjacentHTML('beforeend', toastHtml);
+
+    // Auto-dismiss
+    if (duration > 0) {
+        setTimeout(() => dismissToast(toastId), duration);
+    }
+
+    return toastId;
+}
+
+/**
+ * Dismiss a toast notification with animation
+ */
+function dismissToast(toastId) {
+    const toast = document.getElementById(toastId);
+    if (!toast) return;
+
+    toast.classList.add('toast-exit');
+    setTimeout(() => toast.remove(), 300);
+}
+
+// ============================================
+// INDEXING PROGRESS TRACKING
+// ============================================
+
+/**
+ * Update the indexing progress panel
+ */
+function updateIndexingProgress(stage, current, total, currentPaperTitle) {
+    const panel = document.getElementById('indexing-progress');
+    const stageEl = document.getElementById('indexing-stage');
+    const countEl = document.getElementById('indexing-count');
+    const progressBar = document.getElementById('indexing-progress-bar');
+    const currentPaperEl = document.getElementById('indexing-current-paper');
+
+    if (!panel) return;
+
+    indexingState = {
+        isActive: stage !== 'complete' && stage !== 'error',
+        totalPapers: total,
+        processedPapers: current,
+        currentPaper: currentPaperTitle,
+        stage: stage
+    };
+
+    if (stage === 'complete' || stage === 'error') {
+        // Hide after brief delay
+        setTimeout(() => panel.classList.add('hidden'), 2000);
+        stageEl.textContent = stage === 'complete' ? 'Indexing complete!' : 'Indexing failed';
+        progressBar.style.width = '100%';
+        return;
+    }
+
+    panel.classList.remove('hidden');
+
+    const stageLabels = {
+        'starting': 'Starting indexing...',
+        'downloading': 'Downloading PDFs...',
+        'processing': 'Processing documents...',
+        'embedding': 'Generating embeddings...',
+        'summarizing': 'Creating summaries...',
+        'extracting_citations': 'Extracting citations...',
+        'indexing_linked': 'Indexing cited papers...'
+    };
+
+    stageEl.textContent = stageLabels[stage] || stage;
+    countEl.textContent = `${current}/${total}`;
+    progressBar.style.width = total > 0 ? `${(current / total) * 100}%` : '0%';
+    currentPaperEl.textContent = currentPaperTitle ? `Processing: ${currentPaperTitle.substring(0, 60)}...` : 'Preparing...';
+}
+
 // Connect to SSE for real-time agent updates
 function connectSSE() {
     const statusIndicator = document.getElementById('status-indicator');
@@ -58,18 +184,87 @@ function handleAgentUpdate(data) {
     const agentStatusText = document.getElementById('agent-status-text');
     const agentDetails = document.getElementById('agent-details');
 
-    agentStatus.classList.remove('hidden');
-    agentStatusText.textContent = data.message || 'Processing...';
+    // Handle different event types
+    const eventType = data.event_type;
 
-    if (data.details) {
-        agentDetails.textContent = data.details;
-    }
+    switch (eventType) {
+        case 'toast':
+            // Show toast notification
+            showToast(
+                data.toast_type || 'info',
+                data.title || 'Notification',
+                data.message || '',
+                data.duration || 5000
+            );
+            return;
 
-    // Auto-hide after completion
-    if (data.status === 'complete') {
-        setTimeout(() => {
-            agentStatus.classList.add('hidden');
-        }, 3000);
+        case 'indexing_progress':
+            // Update indexing progress panel
+            updateIndexingProgress(
+                data.stage,
+                data.current || 0,
+                data.total || 0,
+                data.current_paper
+            );
+            return;
+
+        case 'paper_indexed':
+            // Show toast for individual paper completion
+            showToast(
+                'success',
+                'Paper Indexed',
+                data.title ? `"${data.title.substring(0, 50)}..." added to knowledge base` : 'Paper added to knowledge base',
+                4000
+            );
+            return;
+
+        case 'linked_paper_indexed':
+            // Show toast for linked/cited paper
+            showToast(
+                'info',
+                'Cited Paper Indexed',
+                data.title ? `"${data.title.substring(0, 50)}..." from citations` : 'Cited paper added',
+                4000
+            );
+            return;
+
+        case 'indexing_complete':
+            // Show final completion toast
+            updateIndexingProgress('complete', data.total, data.total, null);
+            showToast(
+                'success',
+                'Indexing Complete',
+                `${data.papers_indexed || 0} papers indexed with ${data.vectors_stored || 0} vectors`,
+                6000
+            );
+            return;
+
+        case 'indexing_error':
+            // Show error toast
+            updateIndexingProgress('error', 0, 0, null);
+            showToast(
+                'error',
+                'Indexing Failed',
+                data.error || 'An error occurred during indexing',
+                8000
+            );
+            return;
+
+        default:
+            // Legacy handling for backward compatibility
+            agentStatus.classList.remove('hidden');
+            agentStatusText.textContent = data.message || 'Processing...';
+
+            if (data.details) {
+                agentDetails.textContent = data.details;
+            }
+
+            // Auto-hide after completion
+            if (data.status === 'complete') {
+                setTimeout(() => {
+                    agentStatus.classList.add('hidden');
+                }, 3000);
+            }
     }
 }
 

@@ -10,7 +10,7 @@ import asyncio
 import time
 import uuid
 from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, HTTPException, status, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 import structlog
 
@@ -27,7 +27,11 @@ from agents import (
     semantic_analysis_agent,
     summarization_agent,
     qa_specialist_agent,
-    research_advisor_agent
+    research_advisor_agent,
+    # Context Engineering agents - DISABLED (auto-indexes without consent)
+    # paper_summarizer_agent,
+    # citation_extractor_agent,
+    # linked_paper_indexer_agent
 )
 from processors.arxiv_client import (
     search_arxiv_papers,
@@ -35,7 +39,7 @@ from processors.arxiv_client import (
     ArXivAPIError
 )
 from praval import start_agents
-from ...core.messaging import get_publisher
+from ...core.messaging import get_publisher, BROADCAST_CHANNEL
 from ...storage.vector_search import get_vector_search_client
 from ...core.config import get_settings
 from openai import OpenAI
@@ -85,26 +89,42 @@ def generate_conversation_title(question: str, answer: str) -> str:
 _active_sessions: Dict[str, Dict[str, Any]] = {}
 
 
+_agents_initialized = False
+
 async def _initialize_agents_if_needed():
-    """Ensure research agents are initialized and running."""
+    """Ensure research agents are initialized using InMemory backend (simple, reliable)."""
+    global _agents_initialized
+
+    if _agents_initialized:
+        return True
+
     try:
-        # Start all research agents using Praval's start_agents
+        # Use simple start_agents with InMemory backend - reliable and works in same process
+        # NOTE: Context engineering agents (paper_summarizer, citation_extractor, linked_paper_indexer)
+        # are DISABLED to prevent automatic background indexing without user consent.
+        # These can be re-enabled when user preference controls are implemented.
         agents = [
             paper_discovery_agent,
-            document_processing_agent, 
+            document_processing_agent,
             semantic_analysis_agent,
             summarization_agent,
+            # Context Engineering agents - DISABLED (auto-indexes without consent)
+            # paper_summarizer_agent,
+            # citation_extractor_agent,
+            # linked_paper_indexer_agent,
+            # Interaction agents
             qa_specialist_agent,
             research_advisor_agent
         ]
-        
-        # Initialize agent system
-        result = start_agents(*agents)
-        logger.info("Praval research agents initialized", agents_count=len(agents))
+
+        # Initialize with InMemory backend using 'broadcast' channel to match publisher
+        result = start_agents(*agents, channel=BROADCAST_CHANNEL)
+        _agents_initialized = True
+        logger.info("Praval research agents initialized (InMemory)", agents_count=len(agents), channel=BROADCAST_CHANNEL)
         return True
-        
+
     except Exception as e:
-        logger.warning("Failed to initialize Praval agents", error=str(e))
+        logger.warning("Failed to initialize Praval agents", error=str(e), exc_info=True)
         return False
 
 
@@ -804,6 +824,9 @@ async def index_papers(
             paper_count=len(papers)
         )
 
+        # Ensure agents are initialized (same as search/qa endpoints)
+        await _initialize_agents_if_needed()
+
         # Use native Praval publisher to send papers_found message
         publisher = get_publisher()
         broadcast_result = await publisher.publish_index_request(
@@ -856,31 +879,104 @@ async def index_papers(
 # Knowledge Base Management Endpoints
 
 @router.get("/knowledge-base/papers", summary="List all indexed papers")
-async def list_indexed_papers() -> Dict[str, Any]:
+async def list_indexed_papers(
+    search: Optional[str] = Query(None, description="Search term to filter by title"),
+    category: Optional[str] = Query(None, description="Filter by arXiv category (e.g., cs.AI, cs.LG)"),
+    source: Optional[str] = Query(None, description="Filter by source: 'kb' (main), 'linked' (cited), or 'all'"),
+    sort: Optional[str] = Query("title", description="Sort by: 'title', 'date', 'date_added', 'chunks'"),
+    sort_order: Optional[str] = Query("asc", description="Sort order: 'asc' or 'desc'"),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(20, ge=1, le=100, description="Number of papers per page")
+) -> Dict[str, Any]:
     """
     Get a list of all papers currently indexed in the knowledge base.
 
-    Returns metadata for each paper including title, authors, chunk count, etc.
-    This provides visibility into what's available for Q&A.
+    Supports filtering by search term, category, and source.
+    Supports sorting by title, date, or chunk count.
+    Supports pagination.
     """
     try:
         from agentic_research.storage.qdrant_client import QdrantClientWrapper
 
         qdrant = QdrantClientWrapper()
-        papers = qdrant.get_all_papers()
+        all_papers = qdrant.get_all_papers()
 
+        # Also get linked papers if needed
+        linked_papers = []
+        if source in [None, 'all', 'linked']:
+            try:
+                linked_papers = qdrant.get_all_linked_papers()
+                # Mark them as linked
+                for p in linked_papers:
+                    p['is_linked'] = True
+            except Exception:
+                pass  # Linked papers collection may not exist
+
+        # Combine based on source filter
+        if source == 'kb':
+            papers = all_papers
+        elif source == 'linked':
+            papers = linked_papers
+        else:  # 'all' or None
+            papers = all_papers + linked_papers
+
+        # Apply search filter (case-insensitive title search)
+        if search:
+            search_lower = search.lower()
+            papers = [p for p in papers if search_lower in p.get('title', '').lower()]
+
+        # Apply category filter
+        if category:
+            papers = [p for p in papers if category in p.get('categories', [])]
+
+        # Calculate totals before pagination
+        total_papers = len(papers)
         total_vectors = sum(p.get('chunk_count', 0) for p in papers)
 
+        # Apply sorting
+        sort_key = {
+            'title': lambda p: p.get('title', '').lower(),
+            'date': lambda p: p.get('published_date', ''),
+            'date_added': lambda p: p.get('indexed_at', ''),
+            'chunks': lambda p: p.get('chunk_count', 0)
+        }.get(sort, lambda p: p.get('title', '').lower())
+
+        papers = sorted(papers, key=sort_key, reverse=(sort_order == 'desc'))
+
+        # Apply pagination
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_papers = papers[start_idx:end_idx]
+
+        # Get available categories for filter dropdown
+        all_categories = set()
+        for p in all_papers + linked_papers:
+            all_categories.update(p.get('categories', []))
+
         logger.info(
-            "Listed all indexed papers",
-            total_papers=len(papers),
-            total_vectors=total_vectors
+            "Listed indexed papers with filters",
+            total_papers=total_papers,
+            filtered_count=len(paginated_papers),
+            search=search,
+            category=category,
+            source=source
         )
 
         return {
-            "papers": papers,
-            "total_papers": len(papers),
+            "papers": paginated_papers,
+            "total_papers": total_papers,
             "total_vectors": total_vectors,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total_papers + page_size - 1) // page_size,
+            "available_categories": sorted(list(all_categories)),
+            "filters_applied": {
+                "search": search,
+                "category": category,
+                "source": source,
+                "sort": sort,
+                "sort_order": sort_order
+            },
             "status": "success"
         }
 
@@ -1083,6 +1179,277 @@ async def get_paper_pdf(paper_id: str):
             detail=f"Failed to serve PDF: {str(e)}"
         )
 
+
+@router.get("/knowledge-base/papers/{paper_id}/related", summary="Find related/cited papers")
+async def get_related_papers(paper_id: str) -> Dict[str, Any]:
+    """
+    Extract citations and find related papers for a specific KB paper.
+
+    This endpoint:
+    1. Retrieves the paper's text from MinIO (or uses abstract)
+    2. Uses LLM to extract key citations
+    3. Searches ArXiv to find arXiv IDs for citations
+    4. Returns a list of related papers that can be indexed
+
+    The user can then select which papers to index via POST /research/index.
+    """
+    import re
+    from openai import OpenAI
+
+    try:
+        from agentic_research.storage.qdrant_client import QdrantClientWrapper
+        from agentic_research.storage.minio_client import MinIOClient
+
+        qdrant = QdrantClientWrapper()
+        minio = MinIOClient(settings)
+
+        # Get paper metadata from Qdrant
+        papers = qdrant.get_all_papers()
+        paper_meta = next((p for p in papers if p.get('paper_id') == paper_id), None)
+
+        if not paper_meta:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Paper '{paper_id}' not found in knowledge base"
+            )
+
+        paper_title = paper_meta.get('title', 'Unknown')
+        paper_abstract = paper_meta.get('abstract', '')
+        paper_categories = paper_meta.get('categories', [])
+
+        # Try to get full text from PDF in MinIO
+        paper_text = ""
+        text_source = "none"
+        try:
+            import pdfplumber
+            import io
+
+            # Download PDF from MinIO
+            pdf_bytes = minio.download_pdf(paper_id)
+            if pdf_bytes:
+                # Extract text from PDF
+                with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                    pages_text = []
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            pages_text.append(page_text)
+                    paper_text = "\n\n".join(pages_text)
+
+                if paper_text:
+                    text_source = "pdf"
+                    logger.info(f"Extracted text from PDF for {paper_id}, length: {len(paper_text)}")
+        except Exception as e:
+            logger.info(f"Could not extract text from PDF for {paper_id}: {e}")
+
+        # Use abstract if no full text
+        if not paper_text:
+            paper_text = paper_abstract
+            if paper_text:
+                text_source = "abstract"
+                logger.info(f"Using abstract for {paper_id}, length: {len(paper_text)}")
+
+        if not paper_text:
+            return {
+                "paper_id": paper_id,
+                "paper_title": paper_title,
+                "related_papers": [],
+                "message": "No text available for citation extraction"
+            }
+
+        # Extract citations using LLM
+        openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+        # Limit text to avoid token limits - but try to include the References section
+        # References are usually at the end, so prioritize that
+        if len(paper_text) > 15000:
+            # Take first 5000 chars (intro/abstract) + last 10000 chars (likely has References)
+            text_sample = paper_text[:5000] + "\n\n[...middle content omitted...]\n\n" + paper_text[-10000:]
+        else:
+            text_sample = paper_text
+
+        extraction_prompt = f"""You are a citation extractor. Your ONLY job is to copy citations VERBATIM from the References section.
+
+Paper Title: {paper_title}
+
+Paper Text:
+{text_sample}
+
+STRICT INSTRUCTIONS:
+1. Find the "References" or "Bibliography" section at the end of the paper
+2. Copy EXACTLY 5 citations from that section - do not paraphrase or modify
+3. Only extract references that have the format: Author. Year. Title. Venue.
+
+For each reference, extract:
+- TITLE: Copy the EXACT title from the reference (word for word)
+- AUTHORS: The first author's last name EXACTLY as written
+- YEAR: The year EXACTLY as written
+- RELEVANCE: Brief description based on where it's cited in the paper
+
+Output format:
+CITATION 1:
+TITLE: [copy exact title]
+AUTHORS: [first author last name]
+YEAR: [year]
+RELEVANCE: [brief reason]
+
+CITATION 2:
+...
+
+RULES:
+- If you cannot find a References section, output ONLY: "NO REFERENCES FOUND"
+- Do NOT make up titles that don't appear in the text
+- Do NOT guess or hallucinate - only extract what's written
+- Preserve EXACT spacing in titles - copy word by word with proper spaces
+- Prefer arXiv papers (often have IDs like arXiv:XXXX.XXXXX)
+- Prefer citations that mention AI, machine learning, neural networks, agents
+- Avoid textbooks, books, and conference proceedings without arXiv versions
+
+Maximum 5 citations."""
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": extraction_prompt}],
+            temperature=0.3,
+            max_tokens=1500
+        )
+
+        llm_response = response.choices[0].message.content
+        logger.info(f"LLM response for {paper_id} (text_source={text_source}): {llm_response[:500]}...")
+
+        # Parse citations from LLM response
+        citations = []
+        current_citation = {}
+
+        for line in llm_response.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.startswith("CITATION"):
+                if current_citation and current_citation.get("title"):
+                    citations.append(current_citation)
+                current_citation = {}
+            elif line.startswith("TITLE:"):
+                current_citation["title"] = line.replace("TITLE:", "").strip()
+            elif line.startswith("AUTHORS:"):
+                current_citation["authors"] = line.replace("AUTHORS:", "").strip()
+            elif line.startswith("YEAR:"):
+                year = line.replace("YEAR:", "").strip()
+                if year.lower() != "unknown":
+                    current_citation["year"] = year
+            elif line.startswith("RELEVANCE:"):
+                current_citation["relevance"] = line.replace("RELEVANCE:", "").strip()
+
+        # Don't forget the last citation
+        if current_citation and current_citation.get("title"):
+            citations.append(current_citation)
+
+        # Search ArXiv to find paper details for each citation
+        import urllib.parse
+        import urllib.request
+        import xml.etree.ElementTree as ET
+
+        related_papers = []
+
+        for citation in citations[:5]:
+            title = citation.get("title", "")
+            if not title:
+                continue
+
+            try:
+                # Strip any existing quotes from title, then add quotes for exact match
+                clean_title = title.strip('"\'')
+                search_query = urllib.parse.quote(f'"{clean_title}"')
+                url = f"{settings.ARXIV_BASE_URL}?search_query=ti:{search_query}&max_results=1"
+
+                with urllib.request.urlopen(url, timeout=20) as resp:
+                    data = resp.read().decode('utf-8')
+
+                root = ET.fromstring(data)
+                ns = {'atom': 'http://www.w3.org/2005/Atom'}
+
+                for entry in root.findall('atom:entry', ns):
+                    entry_id = entry.find('atom:id', ns)
+                    entry_title = entry.find('atom:title', ns)
+                    entry_summary = entry.find('atom:summary', ns)
+                    entry_published = entry.find('atom:published', ns)
+
+                    if entry_id is not None:
+                        id_text = entry_id.text
+                        match = re.search(r'(\d{4}\.\d{4,5}(?:v\d+)?)', id_text)
+                        if match:
+                            arxiv_id = match.group(1)
+                            arxiv_title = entry_title.text.strip() if entry_title is not None else ""
+
+                            # Get authors
+                            authors = []
+                            for author in entry.findall('atom:author', ns):
+                                name = author.find('atom:name', ns)
+                                if name is not None:
+                                    authors.append(name.text)
+
+                            # Get categories
+                            categories = []
+                            for cat in entry.findall('atom:category', ns):
+                                term = cat.get('term')
+                                if term:
+                                    categories.append(term)
+
+                            related_papers.append({
+                                "arxiv_id": arxiv_id,
+                                "title": arxiv_title,
+                                "authors": authors[:5],  # Limit to 5 authors
+                                "abstract": entry_summary.text.strip()[:500] if entry_summary is not None else "",
+                                "published_date": entry_published.text[:10] if entry_published is not None else None,
+                                "categories": categories[:3],
+                                "url": f"http://arxiv.org/abs/{arxiv_id}",
+                                "relevance": citation.get("relevance", ""),
+                                "source_paper_id": paper_id,
+                                "source_paper_title": paper_title
+                            })
+                            break  # Only take first match
+
+            except Exception as e:
+                logger.warning(f"ArXiv search failed for '{title}': {e}")
+                continue
+
+        # Check which papers are already in KB
+        existing_ids = {p.get('paper_id') for p in papers}
+        for paper in related_papers:
+            paper["already_indexed"] = paper.get("arxiv_id") in existing_ids
+
+        logger.info(
+            "Related papers extracted",
+            paper_id=paper_id,
+            citations_found=len(citations),
+            papers_resolved=len(related_papers)
+        )
+
+        return {
+            "paper_id": paper_id,
+            "paper_title": paper_title,
+            "related_papers": related_papers,
+            "citations_extracted": len(citations),
+            "papers_found": len(related_papers),
+            "message": f"Found {len(related_papers)} related papers from {len(citations)} citations"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to extract related papers",
+            paper_id=paper_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to extract related papers: {str(e)}"
+        )
+
+
 # ==========================================
 # Proactive Research Insights Endpoint
 # ==========================================
@@ -1197,6 +1564,74 @@ async def get_research_insights() -> Dict[str, Any]:
             detail=f"Failed to generate insights: {str(e)}"
         )
 
+
+@router.get("/areas/{area_name}/papers", summary="Get papers by research area")
+async def get_papers_by_area(
+    area_name: str,
+    limit: int = Query(10, ge=1, le=50, description="Maximum papers to return")
+) -> Dict[str, Any]:
+    """
+    Get papers that match a research area using semantic search.
+
+    Uses the area name/description to find relevant papers from the knowledge base
+    via embedding similarity search.
+    """
+    try:
+        from agentic_research.storage.qdrant_client import QdrantClientWrapper
+        from agentic_research.storage.embeddings import EmbeddingsGenerator
+
+        settings = get_settings()
+        qdrant_client = QdrantClientWrapper(settings)
+        embeddings_gen = EmbeddingsGenerator(settings)
+
+        # Generate embedding for the area name/description
+        area_embedding = embeddings_gen.generate_embedding(area_name)
+
+        # Search for similar papers - use a lower threshold for broad area searches
+        search_results = qdrant_client.search_similar(
+            area_embedding,
+            limit=limit * 3,  # Get more results since we'll collapse chunks to papers
+            score_threshold=0.3  # Lower threshold for area-based searches
+        )
+
+        # Get unique papers (collapse chunks to papers)
+        seen_papers = set()
+        papers = []
+
+        for result in search_results:
+            paper_id = result.get("payload", {}).get("paper_id")
+            if paper_id and paper_id not in seen_papers:
+                seen_papers.add(paper_id)
+                papers.append({
+                    "paper_id": paper_id,
+                    "title": result.get("payload", {}).get("title", "Unknown"),
+                    "authors": result.get("payload", {}).get("authors", []),
+                    "abstract": result.get("payload", {}).get("abstract", "")[:500],
+                    "categories": result.get("payload", {}).get("categories", []),
+                    "relevance_score": round(result.get("score", 0), 3)
+                })
+
+        logger.info(
+            "Retrieved papers by area",
+            area_name=area_name,
+            papers_found=len(papers)
+        )
+
+        return {
+            "area_name": area_name,
+            "papers": papers,
+            "total_found": len(papers),
+            "status": "success"
+        }
+
+    except Exception as e:
+        logger.error("Failed to get papers by area", area_name=area_name, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve papers: {str(e)}"
+        )
+
+
 # ==========================================
 # Conversation Management Endpoints
 # ==========================================
@@ -1214,9 +1649,12 @@ async def create_conversation(request: ConversationCreateRequest = ConversationC
     """
     try:
         from agentic_research.storage.conversation_store import get_conversation_store
+        from datetime import datetime
 
         store = get_conversation_store()
-        conversation = await store.create_conversation(request.title)
+        # Provide default title if none given
+        title = request.title or f"New Conversation {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        conversation = await store.create_conversation(title)
 
         logger.info("Created new conversation", conversation_id=conversation.id, title=conversation.title)
 

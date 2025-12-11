@@ -10,6 +10,10 @@ Uses Praval's default channel and routing. Simple pattern:
 Message Flow:
   search_request → [paper_searcher] → papers_found → [document_processor] → ...
 
+Context Engineering Pipeline:
+  documents_processed → [paper_summarizer] → papers_summarized →
+  [citation_extractor] → citations_extracted → [linked_paper_indexer]
+
 Usage:
     python src/run_agents.py
     python src/run_agents.py --local  # For testing without RabbitMQ
@@ -30,6 +34,11 @@ from agents.research.paper_discovery import paper_discovery_agent
 from agents.research.document_processor import document_processing_agent
 from agents.research.semantic_analyzer import semantic_analysis_agent
 from agents.research.summarization import summarization_agent
+# Context Engineering agents - DISABLED: auto-indexes without user consent
+# from agents.research.paper_summarizer import paper_summarizer_agent
+# from agents.research.citation_extractor import citation_extractor_agent
+# from agents.research.linked_paper_indexer import linked_paper_indexer_agent
+
 from agents.interaction.qa_specialist import qa_specialist_agent
 from agents.interaction.research_advisor import research_advisor_agent
 
@@ -45,10 +54,18 @@ settings = get_settings()
 
 # All agents
 AGENTS = [
+    # Core research agents
     paper_discovery_agent,
     document_processing_agent,
     semantic_analysis_agent,
     summarization_agent,
+    # Context Engineering pipeline - DISABLED: auto-indexes without user consent
+    # These agents automatically index linked papers in the background.
+    # Uncomment when user preference/toggle is implemented.
+    # paper_summarizer_agent,
+    # citation_extractor_agent,
+    # linked_paper_indexer_agent,
+    # Interaction agents
     qa_specialist_agent,
     research_advisor_agent,
 ]
