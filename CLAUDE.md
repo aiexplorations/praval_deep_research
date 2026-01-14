@@ -1367,3 +1367,185 @@ def knowledge_base_curator(spore):
 - Storage utilization
 
 This project demonstrates excellence in agentic system design using Praval's powerful patterns while maintaining enterprise-grade quality standards throughout. The Knowledge Base Management feature exemplifies the pragmatic balance between direct API access for simple operations and intelligent agent-based approaches for complex, decision-oriented tasks.
+
+## Vajra BM25 Hybrid Search Integration
+
+### Overview
+
+The system integrates [Vajra BM25](https://github.com/aiexplorations/vajra_bm25) for high-performance hybrid search over the knowledge base. This enables users to search indexed papers using keyword (BM25), semantic (vector), or hybrid approaches with Reciprocal Rank Fusion (RRF).
+
+### Architecture
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   Frontend      │     │   Backend API    │     │  Search Engines │
+│  Discover Page  │────▶│  /kb-search      │────▶│ Vajra Hybrid    │
+│ [ArXiv|KB Mode] │     │  /start-chat     │     │ (BM25 + Vector) │
+└────────┬────────┘     └──────────────────┘     └────────┬────────┘
+         │                                                │
+         │  User selects papers                           │ RRF Fusion
+         │  & clicks "Chat"                               │
+         ▼                                                ▼
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   Chat Page     │◀────│  Conversation    │◀────│  Qdrant Filter  │
+│  (with context) │     │  with paper_ids  │     │  (server-side)  │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+```
+
+### Key Components
+
+**1. Hybrid Search Wrapper** (`src/agentic_research/storage/hybrid_search.py`):
+
+```python
+class VajraHybridSearch:
+    """Wrapper around Vajra's HybridSearchEngine for paper search."""
+
+    def search(self, query: str, top_k: int = 20, alpha: float = 0.5):
+        """
+        Hybrid search with adjustable BM25 weight.
+
+        Args:
+            query: Search query
+            top_k: Number of results
+            alpha: BM25 weight (1.0=keyword, 0.5=hybrid, 0.0=semantic)
+
+        Returns:
+            List of papers with combined scores
+        """
+```
+
+**2. API Endpoints** (`src/agentic_research/api/routes/kb_search.py`):
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/kb-search` | POST | Hybrid search over indexed papers |
+| `/kb-search/stats` | GET | Search engine statistics |
+| `/kb-search/start-chat` | POST | Create conversation with paper context |
+
+**3. Chat with Papers Flow**:
+
+1. User searches Knowledge Base using hybrid search
+2. Selects one or more papers from results
+3. Clicks "Chat with N Papers" button
+4. Backend creates conversation with `paper_ids` in metadata
+5. User is redirected to Chat page with `?conversation_id=xxx`
+6. Q&A responses are filtered to selected papers via Qdrant `MatchAny` filter
+
+### Request/Response Models
+
+```python
+class KBSearchRequest(BaseModel):
+    query: str                    # Search query
+    top_k: int = 20              # Max results
+    alpha: float = 0.5           # BM25 weight (1.0=keyword, 0.5=hybrid, 0.0=semantic)
+    categories: List[str] = None  # Filter by ArXiv categories
+
+class KBSearchResponse(BaseModel):
+    query: str
+    search_mode: str             # "keyword", "hybrid", or "semantic"
+    alpha: float
+    results: List[KBPaperResult]
+    total_found: int
+    search_time_ms: int
+
+class KBPaperResult(BaseModel):
+    paper_id: str
+    title: str
+    authors: List[str]
+    categories: List[str]
+    abstract: str
+    combined_score: float        # RRF fused score
+    bm25_score: Optional[float]  # Individual BM25 score
+    vector_score: Optional[float] # Individual vector score
+    matching_chunks: int
+```
+
+### Frontend Components
+
+**Search Mode Toggle** (`frontend-new/src/components/discover/SearchModeToggle.tsx`):
+- Switches between "ArXiv" (external API) and "Knowledge Base" (indexed papers)
+
+**Hybrid Alpha Slider** (`frontend-new/src/components/discover/HybridAlphaSlider.tsx`):
+- Visual slider to adjust keyword↔semantic balance
+- Labels: "Keyword" (α=1.0) | "Balanced" (α=0.5) | "Semantic" (α=0.0)
+
+**Paper Selection**:
+- Checkboxes on paper cards in KB mode
+- Floating "Chat with N" action button when papers selected
+
+### Conversation Metadata
+
+Conversations from KB search store paper context:
+
+```python
+conversation.metadata = {
+    "paper_ids": ["2312.05589v2", "2401.12345v1"],
+    "paper_titles": ["Attention Is All You Need", "BERT: Pre-training..."],
+    "source": "kb_search",
+    "scope": "primary_plus_related"
+}
+```
+
+This metadata is used by the Q&A specialist to filter vector search results.
+
+### Server-Side Filtering
+
+The vector search client supports paper_id filtering at the Qdrant level:
+
+```python
+# In vector_search.py
+query_filter = Filter(
+    must=[
+        FieldCondition(
+            key="paper_id",
+            match=MatchAny(any=paper_ids)
+        )
+    ]
+)
+
+results = self.client.search(
+    collection_name=self.collection_name,
+    query_vector=query_embedding,
+    query_filter=query_filter,  # Server-side filtering
+    limit=top_k,
+    score_threshold=score_threshold
+)
+```
+
+### Performance Optimizations
+
+**Fast Category Filter**:
+- Research insights category clicks use Vajra BM25 index directly
+- Response time: ~3ms (vs 2-3s with semantic search)
+- Implementation in `src/agentic_research/api/routes/research.py`
+
+**Periodic Insights Refresh**:
+- Background asyncio task refreshes research insights every 30 minutes
+- Prevents stale insights without blocking user requests
+
+### Testing
+
+```bash
+# Test KB search
+curl -X POST http://localhost:8000/kb-search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "transformer attention", "alpha": 0.5}'
+
+# Test Chat with Papers
+curl -X POST http://localhost:8000/kb-search/start-chat \
+  -H "Content-Type: application/json" \
+  -d '{"paper_ids": ["2312.05589v2"], "initial_question": "What is the key innovation?"}'
+
+# Get search stats
+curl http://localhost:8000/kb-search/stats
+```
+
+### Future: Vajra Migration Plan
+
+A comprehensive migration plan exists at `plans/vajra-migration.md` to:
+
+1. **Consolidate on Vajra Search**: Replace Qdrant vector search with Vajra's native vector search
+2. **Add Local LLM Support**: Configurable providers (Ollama, LM Studio, OpenAI-compatible)
+3. **Reduce Infrastructure**: Remove Qdrant dependency, simplify deployment
+
+This migration would be implemented on a separate branch to maintain stability.

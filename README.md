@@ -136,6 +136,23 @@ Each agent has:
 - **Keyboard Shortcuts**: Efficient navigation and interaction
 - **Dark Mode Ready**: Infrastructure for theme switching
 
+### 🔍 Vajra BM25 Hybrid Search (NEW)
+
+<div align="center">
+<img src="img/pdr_discover_insights_2.png" alt="Knowledge Base Search" width="800"/>
+<p><em>Knowledge Base Search: Hybrid search with adjustable keyword/semantic balance</em></p>
+</div>
+
+- **Dual Search Modes**: Toggle between ArXiv (external) and Knowledge Base (indexed papers)
+- **Hybrid Search Engine**: Powered by [Vajra BM25](https://github.com/aiexplorations/vajra_bm25) with RRF fusion
+- **Adjustable Search Balance**: Slider to control keyword↔semantic weighting
+  - α=1.0: Pure BM25 keyword search (exact term matching)
+  - α=0.5: Balanced hybrid (default, best of both worlds)
+  - α=0.0: Pure semantic/vector search (conceptual similarity)
+- **Paper Selection**: Select multiple papers from search results
+- **Chat with Papers**: Start contextual Q&A focused on selected papers
+- **Server-side Filtering**: Responses filtered to selected papers at the database level
+
 ### 🔮 Proactive Research Insights (NEW)
 
 <div align="center">
@@ -150,6 +167,7 @@ Each agent has:
 - **Personalized Next Steps**: Strategic research recommendations based on chat history
 - **Smart Caching**: Insights generated in 35s, cached for instant retrieval (1hr TTL)
 - **Context-Aware**: Analyzes both knowledge base and recent conversation patterns
+- **Fast Category Filter**: Category clicks use Vajra BM25 index (~3ms response)
 
 ### 🏗️ Production-Grade Infrastructure
 - **Vector Database**: Qdrant for semantic search (1536-dim OpenAI embeddings)
@@ -549,7 +567,7 @@ This project showcases the power of the [Praval Agentic Framework](https://prava
 
 ## 🗺️ Roadmap
 
-### Current (v1.1)
+### Current (v1.2)
 - ✅ ArXiv paper search and indexing
 - ✅ Semantic Q&A over indexed papers
 - ✅ Knowledge base management with PDF viewing
@@ -562,6 +580,10 @@ This project showcases the power of the [Praval Agentic Framework](https://prava
 - ✅ Summarize in Chat: One-click paper summaries
 - ✅ Proactive Research Insights with clickable topics
 - ✅ Advanced KB filters (search, category, source, sort)
+- ✅ **Vajra BM25 Hybrid Search**: Keyword + semantic with RRF fusion
+- ✅ **Chat with Papers**: Select papers and start focused Q&A
+- ✅ **Adjustable Search Balance**: Slider for keyword↔semantic weighting
+- ✅ **Fast Category Filter**: ~3ms response using Vajra BM25 index
 
 ### In Progress
 - 🔄 Voice interface for hands-free research
@@ -674,6 +696,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## 🙏 Acknowledgments
 
 - **[Praval Framework](https://pravalagents.com)** - The foundation of this agentic system
+- **[Vajra BM25](https://github.com/aiexplorations/vajra_bm25)** - High-performance hybrid search engine
 - **[ArXiv](https://arxiv.org)** - Open access to research papers
 - **[Qdrant](https://qdrant.tech)** - High-performance vector database
 - **[FastAPI](https://fastapi.tiangolo.com)** - Modern Python web framework
