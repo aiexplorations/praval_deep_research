@@ -33,7 +33,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from prometheus_client import Counter, Histogram, Gauge
 import uvicorn
 
-from .routes import health_router, research_router
+from .routes import health_router, research_router, kb_search_router
 from .routes.sse import router as sse_router, set_event_loop
 from .models.research import ErrorResponse
 from ..core.config import get_settings
@@ -82,14 +82,46 @@ ACTIVE_CONNECTIONS = Gauge(
 _app_start_time = time.time()
 
 
+async def _periodic_insights_refresh(interval_seconds: int = 1800):
+    """
+    Periodic background task to refresh research insights.
+
+    Runs every `interval_seconds` (default: 30 minutes) to ensure
+    insights cache stays fresh even without user requests.
+    """
+    logger.info(f"Starting periodic insights refresh (interval: {interval_seconds}s)")
+
+    # Wait a bit before first refresh to let the app fully start
+    await asyncio.sleep(60)
+
+    while True:
+        try:
+            # Import here to avoid circular imports
+            from .routes.research import _generate_insights_background
+
+            logger.info("Periodic: Triggering research insights refresh")
+            await _generate_insights_background()
+            logger.info("Periodic: Research insights refresh completed")
+
+        except asyncio.CancelledError:
+            logger.info("Periodic insights refresh task cancelled")
+            break
+        except Exception as e:
+            logger.warning(f"Periodic insights refresh failed: {e}")
+
+        # Sleep until next refresh
+        await asyncio.sleep(interval_seconds)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Application lifespan manager.
-    
+
     Handles startup and shutdown tasks including:
     - Research agent initialization
     - Infrastructure connections
+    - Periodic background tasks
     - Graceful shutdown
     """
     # Startup
@@ -117,6 +149,14 @@ async def lifespan(app: FastAPI):
         # Note: Praval agents are initialized on-demand in routes/research.py
         # This allows for better scalability and resource management
 
+        # Start periodic background tasks
+        logger.info("Starting periodic background tasks")
+        insights_task = asyncio.create_task(
+            _periodic_insights_refresh(interval_seconds=1800)  # 30 minutes
+        )
+        app.state.insights_refresh_task = insights_task
+        logger.info("Periodic insights refresh task started (30-minute interval)")
+
         # Store startup metadata
         app.state.started_at = time.time()
         app.state.distributed_mode = True  # Using Praval distributed agents
@@ -134,6 +174,16 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Praval Deep Research API")
 
     try:
+        # Cancel periodic background tasks
+        if hasattr(app.state, 'insights_refresh_task'):
+            logger.info("Cancelling periodic insights refresh task")
+            app.state.insights_refresh_task.cancel()
+            try:
+                await app.state.insights_refresh_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Periodic insights refresh task cancelled")
+
         # Close database connections
         logger.info("Closing database connections")
         try:
@@ -367,6 +417,7 @@ async def internal_server_error_handler(request: Request, exc: Exception):
 # Include routers
 app.include_router(health_router)
 app.include_router(research_router)
+app.include_router(kb_search_router)
 app.include_router(sse_router)
 
 

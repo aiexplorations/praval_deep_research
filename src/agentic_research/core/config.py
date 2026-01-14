@@ -88,6 +88,25 @@ class Settings(BaseSettings):
     PDF_DOWNLOAD_TIMEOUT: int = Field(default=60, env="PDF_DOWNLOAD_TIMEOUT")
     PDF_MAX_RETRIES: int = Field(default=3, env="PDF_MAX_RETRIES")
 
+    # BM25 Search Configuration (Vajra)
+    BM25_INDEX_PATH: str = Field(
+        default="./data/vajra_indexes",
+        env="BM25_INDEX_PATH"
+    )
+    BM25_K1: float = Field(default=1.5, env="BM25_K1")
+    BM25_B: float = Field(default=0.75, env="BM25_B")
+    BM25_CACHE_SIZE: int = Field(default=1000, env="BM25_CACHE_SIZE")
+    BM25_USE_SPARSE: bool = Field(default=True, env="BM25_USE_SPARSE")
+    BM25_USE_EAGER: bool = Field(default=True, env="BM25_USE_EAGER")
+
+    # Hybrid Search Configuration
+    HYBRID_SEARCH_ENABLED: bool = Field(default=True, env="HYBRID_SEARCH_ENABLED")
+    RRF_K: int = Field(default=60, env="RRF_K")
+
+    # Context Manager Configuration
+    CONTEXT_MAX_TOKENS: int = Field(default=4000, env="CONTEXT_MAX_TOKENS")
+    CONTEXT_RECENCY_WEIGHT: float = Field(default=0.3, env="CONTEXT_RECENCY_WEIGHT")
+
     # API Configuration
     API_HOST: str = Field(default="0.0.0.0", env="API_HOST")
     API_PORT: int = Field(default=8000, env="API_PORT")

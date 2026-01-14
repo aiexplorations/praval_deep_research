@@ -28,7 +28,10 @@ dependencies = [
     "pydantic>=2.4.0",
     
     # Agent Framework
-    "praval @ file:///Users/rajesh/Github/praval/dist/praval-0.6.0-py3-none-any.whl",
+    "praval>=0.7.20",
+
+    # BM25 Search Engine
+    "vajra-bm25>=0.4.0",
     
     # Messaging & Communication
     "aio-pika>=9.3.0",

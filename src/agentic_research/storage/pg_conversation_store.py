@@ -46,6 +46,7 @@ class ConversationDict(BaseModel):
     message_count: int
     active_thread_id: int = 0
     max_thread_id: int = 0
+    metadata: Optional[Dict[str, Any]] = None  # Paper context, source info, etc.
 
 
 class ThreadInfo(BaseModel):
@@ -104,6 +105,7 @@ class PostgreSQLConversationStore:
                 message_count=conversation.message_count,
                 active_thread_id=conversation.active_thread_id,
                 max_thread_id=conversation.max_thread_id,
+                metadata=conversation.context_data,
             )
 
     async def list_conversations(
@@ -210,6 +212,15 @@ class PostgreSQLConversationStore:
             await session.commit()
             await session.refresh(message)
 
+            # Index message in BM25 conversation index for full-text search
+            await self._index_message_for_search(
+                message_id=str(message.id),
+                conversation_id=conv_id,
+                role=message.role,
+                content=message.content,
+                timestamp=message.timestamp,
+            )
+
             return MessageDict(
                 id=str(message.id),
                 role=message.role,
@@ -221,6 +232,50 @@ class PostgreSQLConversationStore:
                 has_other_versions=False,
                 version_count=1,
                 current_version=1,
+            )
+
+    async def _index_message_for_search(
+        self,
+        message_id: str,
+        conversation_id: str,
+        role: str,
+        content: str,
+        timestamp: datetime,
+        user_id: str = "default",
+    ) -> None:
+        """
+        Index a message in the BM25 conversation index for full-text search.
+
+        This enables searching conversation history across all conversations.
+
+        Args:
+            message_id: Unique message identifier
+            conversation_id: ID of the conversation
+            role: Message role (user/assistant)
+            content: Message content to index
+            timestamp: When the message was created
+            user_id: User who owns the conversation (defaults to "default")
+        """
+        try:
+            from agentic_research.storage.conversation_index import get_conversation_index
+
+            index = get_conversation_index()
+            index.index_message(
+                message_id=message_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role=role,
+                content=content,
+                timestamp=timestamp,
+            )
+        except Exception as e:
+            # Log but don't fail message creation if indexing fails
+            import structlog
+            logger = structlog.get_logger(__name__)
+            logger.warning(
+                "Failed to index message for BM25 search",
+                message_id=message_id,
+                error=str(e),
             )
 
     async def get_messages(
@@ -333,6 +388,40 @@ class PostgreSQLConversationStore:
             )
             await session.commit()
             return result.rowcount > 0
+
+    async def update_conversation_metadata(
+        self,
+        conv_id: str,
+        metadata: Dict[str, Any]
+    ) -> bool:
+        """
+        Update conversation metadata (e.g., paper_ids for KB search chats).
+
+        Args:
+            conv_id: Conversation ID
+            metadata: Metadata dict to store (replaces existing)
+
+        Returns:
+            True if updated, False if conversation not found
+        """
+        async with self.session_maker() as session:
+            result = await session.execute(
+                update(ConversationModel)
+                .where(ConversationModel.id == uuid.UUID(conv_id))
+                .values(context_data=metadata, updated_at=datetime.utcnow())
+            )
+            await session.commit()
+            return result.rowcount > 0
+
+    async def get_conversation_metadata(self, conv_id: str) -> Optional[Dict[str, Any]]:
+        """Get conversation metadata."""
+        async with self.session_maker() as session:
+            result = await session.execute(
+                select(ConversationModel.context_data)
+                .where(ConversationModel.id == uuid.UUID(conv_id))
+            )
+            row = result.scalar_one_or_none()
+            return row if row else None
 
     # ========== Thread-based Branching Operations ==========
 
