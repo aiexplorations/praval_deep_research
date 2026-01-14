@@ -91,6 +91,13 @@ export interface Tag {
 }
 
 // Conversation types
+export interface ConversationMetadata {
+  paper_ids?: string[];      // Paper IDs for "Chat with Papers" context
+  paper_titles?: string[];   // Paper titles for display
+  source?: string;           // Origin of conversation (e.g., "kb_search")
+  scope?: string;            // Search scope (e.g., "primary_plus_related")
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -100,6 +107,8 @@ export interface Conversation {
   // Thread-based branching
   active_thread_id: number;  // Currently active thread (0 = original)
   max_thread_id: number;     // Highest thread ID created
+  // Paper context for KB search chats
+  metadata?: ConversationMetadata;
 }
 
 export interface ConversationWithMessages extends Conversation {
@@ -217,3 +226,55 @@ export interface ContentGenerationResponse {
 
 // Proactive Research Insights types
 export * from './insights';
+
+// Knowledge Base Hybrid Search types
+export interface KBSearchRequest {
+  query: string;
+  top_k?: number;
+  alpha?: number;  // BM25 weight: 1.0=keyword, 0.5=hybrid, 0.0=semantic
+  categories?: string[];
+  paper_ids?: string[];
+}
+
+export interface KBPaperResult {
+  paper_id: string;
+  title: string;
+  authors: string[];
+  categories: string[];
+  abstract: string;
+  combined_score: number;
+  bm25_score: number | null;
+  bm25_rank: number | null;
+  vector_score: number | null;
+  vector_rank: number | null;
+  matching_chunks: number;
+}
+
+export interface KBSearchResponse {
+  query: string;
+  search_mode: 'keyword' | 'hybrid' | 'semantic';
+  alpha: number;
+  results: KBPaperResult[];
+  total_found: number;
+  search_time_ms: number;
+}
+
+export interface KBSearchStats {
+  total_papers: number;
+  total_chunks: number;
+  bm25_ready: boolean;
+  vector_ready: boolean;
+  last_indexed: string | null;
+}
+
+export interface StartPaperChatRequest {
+  paper_ids: string[];
+  initial_question?: string;
+}
+
+export interface StartPaperChatResponse {
+  conversation_id: string;
+  paper_count: number;
+  paper_titles: string[];
+  redirect_url: string;
+}

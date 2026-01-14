@@ -16,6 +16,7 @@ from .research.paper_discovery import paper_discovery_agent
 from .research.document_processor import document_processing_agent
 from .research.semantic_analyzer import semantic_analysis_agent
 from .research.summarization import summarization_agent
+from .research.kb_search_agent import kb_search_agent
 
 # Context Engineering agents - DISABLED (auto-indexes without user consent)
 # These agents auto-index cited papers which causes "Indexing Papers" popups
@@ -34,6 +35,7 @@ __all__ = [
     'document_processing_agent',
     'semantic_analysis_agent',
     'summarization_agent',
+    'kb_search_agent',
 
     # Context Engineering - DISABLED (requires user consent)
     # 'paper_summarizer_agent',

@@ -132,7 +132,8 @@ class VectorSearchClient:
             raise
 
     def search(self, query: str, top_k: int = 5,
-               score_threshold: float = 0.7) -> List[Dict[str, Any]]:
+               score_threshold: float = 0.7,
+               paper_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
         Search for relevant chunks using semantic similarity.
 
@@ -140,17 +141,21 @@ class VectorSearchClient:
             query: Search query
             top_k: Number of results to return
             score_threshold: Minimum similarity score
+            paper_ids: Optional list of paper IDs to filter results (for "Chat with Papers")
 
         Returns:
             List of relevant chunks with metadata
         """
+        from qdrant_client.models import Filter, FieldCondition, MatchAny
+
         logger.info(
             f"Vector search started",
             extra={
                 "query": query[:100],
                 "top_k": top_k,
                 "score_threshold": score_threshold,
-                "collection": self.collection_name
+                "collection": self.collection_name,
+                "paper_ids_filter": paper_ids
             }
         )
 
@@ -160,11 +165,25 @@ class VectorSearchClient:
             query_embedding = self.generate_embedding(query)
             logger.debug(f"Embedding generated, dimension: {len(query_embedding) if query_embedding else 0}")
 
+            # Build filter for paper_ids if specified
+            query_filter = None
+            if paper_ids:
+                logger.info(f"Applying paper_ids filter: {paper_ids}")
+                query_filter = Filter(
+                    must=[
+                        FieldCondition(
+                            key="paper_id",
+                            match=MatchAny(any=paper_ids)
+                        )
+                    ]
+                )
+
             # Search in Qdrant
             logger.debug(f"Searching Qdrant collection: {self.collection_name}")
             results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_embedding,
+                query_filter=query_filter,
                 limit=top_k,
                 score_threshold=score_threshold
             )

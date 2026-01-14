@@ -9,6 +9,7 @@ intelligent question answering.
 import asyncio
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, status, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
@@ -382,22 +383,30 @@ async def ask_question(
                 if request.context is not None:
                     publish_kwargs["context"] = request.context
 
-                # RETRIEVE AND PASS CONVERSATION HISTORY
+                # RETRIEVE AND PASS CONVERSATION HISTORY AND PAPER CONTEXT
                 if request.conversation_id:
                     try:
                         from agentic_research.storage.conversation_store import get_conversation_store
                         store = get_conversation_store()
-                        
+
+                        # Get conversation metadata (includes paper_ids for KB search chats)
+                        conversation = await store.get_conversation(request.conversation_id)
+                        if conversation and conversation.metadata:
+                            paper_ids = conversation.metadata.get("paper_ids", [])
+                            if paper_ids:
+                                publish_kwargs["paper_ids"] = paper_ids
+                                logger.info(f"Chat with papers: filtering to {len(paper_ids)} papers: {paper_ids}")
+
                         # Get last 5 messages for context
                         # We use get_conversation which likely returns messages, or we might need a specific method
                         # Assuming conversation object has messages or we can fetch them
                         history = await store.get_messages(request.conversation_id, limit=6) # Get last 3 turns
-                        
+
                         conversation_context = []
                         if history:
                             for msg in history:
                                 conversation_context.append(f"{msg.role}: {msg.content}")
-                                
+
                         publish_kwargs["conversation_context"] = conversation_context
                         logger.info(f"Attached {len(conversation_context)} messages of history to Q&A request")
                     except Exception as hist_err:
@@ -418,7 +427,11 @@ async def ask_question(
             logger.info("Sent Q&A request to agents", agents_ready=agents_ready)
 
             # Perform vector search to retrieve relevant context
+            # Use paper_ids from conversation context if available (for "Chat with Papers" feature)
+            paper_ids_filter = publish_kwargs.get("paper_ids", None)
             logger.info(f"Initializing vector search client for question: {request.question[:50]}")
+            if paper_ids_filter:
+                logger.info(f"Filtering search to {len(paper_ids_filter)} papers: {paper_ids_filter}")
             vector_client = get_vector_search_client()
 
             if vector_client is None:
@@ -426,11 +439,14 @@ async def ask_question(
                 relevant_chunks = []
             else:
                 logger.info("Vector client initialized, performing search")
+                # Pass paper_ids directly to Qdrant for server-side filtering
                 relevant_chunks = vector_client.search(
                     query=request.question,
-                    top_k=5,
-                    score_threshold=0.3  # Lowered from 0.6 for better recall
+                    top_k=10 if paper_ids_filter else 5,  # More results when filtering to specific papers
+                    score_threshold=0.2 if paper_ids_filter else 0.3,  # Lower threshold for focused search
+                    paper_ids=paper_ids_filter  # Filter at Qdrant level
                 )
+
                 logger.info(f"Search completed, found {len(relevant_chunks) if relevant_chunks else 0} chunks")
 
             # Build context from retrieved chunks
@@ -841,13 +857,21 @@ async def index_papers(
             papers=len(papers)
         )
 
-        # Invalidate research insights cache (papers added, insights need refresh)
+        # Invalidate research insights cache and trigger background refresh
         try:
             import redis.asyncio as aioredis
             redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
             await redis_client.delete("research_insights:v1")
             await redis_client.close()
             logger.debug("Invalidated research insights cache after indexing")
+
+            # Trigger background refresh after a delay (let indexing complete first)
+            async def delayed_refresh():
+                await asyncio.sleep(60)  # Wait 60s for indexing to complete
+                await _generate_insights_background()
+
+            background_tasks.add_task(delayed_refresh)
+            logger.info("Scheduled insights refresh after indexing")
         except Exception as e:
             logger.warning(f"Failed to invalidate insights cache: {e}")
 
@@ -1454,43 +1478,17 @@ Maximum 5 citations."""
 # Proactive Research Insights Endpoint
 # ==========================================
 
-@router.get("/insights", summary="Get proactive research insights")
-async def get_research_insights() -> Dict[str, Any]:
-    """
-    Generate proactive research insights based on knowledge base,
-    recent papers, and conversation history.
+async def _generate_insights_background():
+    """Background task to generate and cache insights."""
+    import redis.asyncio as aioredis
+    import json
+    from datetime import datetime, timezone
 
-    Returns:
-    - Research area clusters
-    - Trending topics/keywords
-    - Identified research gaps
-    - Personalized next steps
-    - Suggested papers from arXiv (not yet indexed)
+    CACHE_KEY = "research_insights:v1"
+    CACHE_TTL = 3600  # 1 hour
 
-    Results are cached in Redis with 1-hour TTL.
-    """
     try:
-        import redis.asyncio as aioredis
-        import json
-
-        # Check Redis cache first
-        redis_client = aioredis.from_url(
-            settings.REDIS_URL,
-            decode_responses=True,
-            encoding="utf-8"
-        )
-
-        CACHE_KEY = "research_insights:v1"
-        CACHE_TTL = 3600  # 1 hour
-
-        # Try to get cached insights
-        cached_data = await redis_client.get(CACHE_KEY)
-        if cached_data:
-            logger.info("Returning cached research insights")
-            await redis_client.close()
-            return json.loads(cached_data)
-
-        logger.info("Generating fresh research insights...")
+        logger.info("Background: Generating fresh research insights...")
 
         # Fetch recent chat history from PostgreSQL (async)
         recent_queries = []
@@ -1505,11 +1503,11 @@ async def get_research_insights() -> Dict[str, Any]:
                 user_messages = [msg.content for msg in messages if msg.role == 'user']
                 recent_queries.extend(user_messages)
 
-            recent_queries = recent_queries[:10]  # Max 10 recent queries
-            logger.info(f"Fetched {len(recent_queries)} recent queries from PostgreSQL")
+            recent_queries = recent_queries[:10]
+            logger.info(f"Background: Fetched {len(recent_queries)} recent queries")
 
         except Exception as e:
-            logger.warning(f"Could not fetch chat history: {e}")
+            logger.warning(f"Background: Could not fetch chat history: {e}")
             recent_queries = []
 
         # Import the insights generation helper
@@ -1519,16 +1517,114 @@ async def get_research_insights() -> Dict[str, Any]:
         insights = generate_insights_sync(settings, recent_queries=recent_queries)
 
         # Cache the result
-        await redis_client.setex(
-            CACHE_KEY,
-            CACHE_TTL,
-            json.dumps(insights)
+        redis_client = aioredis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            encoding="utf-8"
         )
+        await redis_client.setex(CACHE_KEY, CACHE_TTL, json.dumps(insights))
         await redis_client.close()
 
-        logger.info(f"Generated and cached research insights: {insights['kb_context']['total_papers']} papers analyzed")
+        logger.info(f"Background: Cached research insights ({insights['kb_context']['total_papers']} papers)")
 
-        return insights
+    except Exception as e:
+        logger.error(f"Background: Failed to generate insights: {e}")
+
+
+def _get_basic_insights() -> Dict[str, Any]:
+    """Get basic stats without LLM generation - fast fallback."""
+    from agentic_research.storage.qdrant_client import QdrantClientWrapper
+
+    try:
+        qdrant = QdrantClientWrapper()
+        kb_papers = qdrant.get_all_papers()
+
+        # Extract categories
+        categories = {}
+        for paper in kb_papers:
+            for cat in paper.get("categories", []):
+                categories[cat] = categories.get(cat, 0) + 1
+
+        return {
+            "research_areas": [],
+            "trending_topics": [],
+            "research_gaps": [],
+            "next_steps": [],
+            "suggested_papers": [],
+            "kb_context": {
+                "total_papers": len(kb_papers),
+                "categories": categories,
+                "recent_activity": False
+            },
+            "generation_metadata": {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "kb_papers_analyzed": len(kb_papers),
+                "insights_quality": "basic",
+                "is_cached": False,
+                "refresh_in_progress": True
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to get basic insights: {e}")
+        return {
+            "research_areas": [],
+            "trending_topics": [],
+            "research_gaps": [],
+            "next_steps": [],
+            "suggested_papers": [],
+            "kb_context": {"total_papers": 0, "categories": {}, "recent_activity": False},
+            "generation_metadata": {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "kb_papers_analyzed": 0,
+                "insights_quality": "error",
+                "is_cached": False,
+                "refresh_in_progress": False
+            }
+        }
+
+
+@router.get("/insights", summary="Get proactive research insights")
+async def get_research_insights(background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """
+    Get research insights - returns cached data immediately.
+
+    If no cache exists, returns basic stats and triggers background generation.
+    Insights are cached in Redis with 1-hour TTL.
+
+    Returns:
+    - Research area clusters
+    - Trending topics/keywords
+    - Identified research gaps
+    - Personalized next steps
+    """
+    try:
+        import redis.asyncio as aioredis
+        import json
+
+        redis_client = aioredis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            encoding="utf-8"
+        )
+
+        CACHE_KEY = "research_insights:v1"
+
+        # Try to get cached insights - return immediately if available
+        cached_data = await redis_client.get(CACHE_KEY)
+        await redis_client.close()
+
+        if cached_data:
+            logger.info("Returning cached research insights")
+            result = json.loads(cached_data)
+            result["generation_metadata"]["is_cached"] = True
+            result["generation_metadata"]["refresh_in_progress"] = False
+            return result
+
+        # No cache - return basic stats immediately and generate in background
+        logger.info("No cached insights, returning basic stats and triggering background refresh")
+        background_tasks.add_task(_generate_insights_background)
+
+        return _get_basic_insights()
 
     except ImportError as e:
         # Fallback if agent not available
@@ -1565,18 +1661,96 @@ async def get_research_insights() -> Dict[str, Any]:
         )
 
 
+@router.post("/insights/refresh", summary="Trigger insights refresh")
+async def refresh_research_insights(background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """
+    Manually trigger a refresh of research insights in the background.
+
+    Returns immediately with status, insights will be updated in Redis cache.
+    """
+    logger.info("Manual insights refresh triggered")
+    background_tasks.add_task(_generate_insights_background)
+
+    return {
+        "status": "refresh_started",
+        "message": "Insights refresh triggered in background. Check /insights endpoint for updated data."
+    }
+
+
+def _is_arxiv_category(name: str) -> bool:
+    """Check if name looks like an ArXiv category (e.g., cs.AI, physics.comp-ph)."""
+    import re
+    # ArXiv categories: prefix.suffix where prefix is letters, suffix is letters/digits/hyphens
+    return bool(re.match(r'^[a-z]+(-[a-z]+)?\.[A-Za-z]{2}(-[a-zA-Z]+)?$', name))
+
+
 @router.get("/areas/{area_name}/papers", summary="Get papers by research area")
 async def get_papers_by_area(
     area_name: str,
     limit: int = Query(10, ge=1, le=50, description="Maximum papers to return")
 ) -> Dict[str, Any]:
     """
-    Get papers that match a research area using semantic search.
+    Get papers that match a research area.
 
-    Uses the area name/description to find relevant papers from the knowledge base
-    via embedding similarity search.
+    Fast path: If area_name is an ArXiv category (e.g., cs.AI, cs.LG), uses
+    Vajra BM25 index with category filter (instant, no API calls).
+
+    Slow path: For descriptive names, falls back to semantic search.
     """
+    import time
+    start_time = time.time()
+
     try:
+        # Fast path: ArXiv category filter using Vajra BM25 index
+        if _is_arxiv_category(area_name):
+            logger.info(f"Fast path: Using Vajra category filter for {area_name}")
+            from agentic_research.storage.paper_index import get_paper_index
+
+            paper_index = get_paper_index()
+
+            # Get all indexed papers and filter by category
+            all_papers = paper_index.get_indexed_papers()
+
+            # Filter by category
+            matching_papers = [
+                p for p in all_papers
+                if area_name in p.get("categories", [])
+            ]
+
+            # Sort by chunk count (papers with more chunks = more content)
+            matching_papers.sort(key=lambda p: p.get("chunk_count", 0), reverse=True)
+
+            # Format response
+            papers = []
+            for p in matching_papers[:limit]:
+                papers.append({
+                    "paper_id": p["paper_id"],
+                    "title": p.get("title", "Unknown"),
+                    "authors": p.get("authors", []),
+                    "abstract": p.get("abstract", "")[:500],
+                    "categories": p.get("categories", []),
+                    "relevance_score": 1.0  # Category match is exact
+                })
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.info(
+                "Fast path: Retrieved papers by category",
+                area_name=area_name,
+                papers_found=len(papers),
+                elapsed_ms=elapsed_ms
+            )
+
+            return {
+                "area_name": area_name,
+                "papers": papers,
+                "total_found": len(papers),
+                "search_mode": "category_filter",
+                "elapsed_ms": elapsed_ms,
+                "status": "success"
+            }
+
+        # Slow path: Semantic search for descriptive area names
+        logger.info(f"Slow path: Using semantic search for {area_name}")
         from agentic_research.storage.qdrant_client import QdrantClientWrapper
         from agentic_research.storage.embeddings import EmbeddingsGenerator
 
@@ -1611,16 +1785,20 @@ async def get_papers_by_area(
                     "relevance_score": round(result.get("score", 0), 3)
                 })
 
+        elapsed_ms = int((time.time() - start_time) * 1000)
         logger.info(
-            "Retrieved papers by area",
+            "Slow path: Retrieved papers by semantic search",
             area_name=area_name,
-            papers_found=len(papers)
+            papers_found=len(papers),
+            elapsed_ms=elapsed_ms
         )
 
         return {
             "area_name": area_name,
             "papers": papers,
             "total_found": len(papers),
+            "search_mode": "semantic",
+            "elapsed_ms": elapsed_ms,
             "status": "success"
         }
 

@@ -42,6 +42,16 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.t
 # Copy source code (this layer changes frequently)
 COPY src/ ./src/
 
+# Copy scripts for initialization
+COPY scripts/ ./scripts/
+
+# Copy entrypoint script
+COPY docker/entrypoint-api.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Create data directory for Vajra indexes
+RUN mkdir -p /app/data/vajra_indexes
+
 # Set ownership
 RUN chown -R appuser:appuser /app
 
@@ -52,4 +62,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["python", "-m", "uvicorn", "agentic_research.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/entrypoint.sh"]

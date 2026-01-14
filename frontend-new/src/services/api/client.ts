@@ -25,7 +25,12 @@ import type {
   ThreadVersionInfo,
   ContentFormat,
   ContentStyle,
-  ContentGenerationResponse
+  ContentGenerationResponse,
+  KBSearchRequest,
+  KBSearchResponse,
+  KBSearchStats,
+  StartPaperChatRequest,
+  StartPaperChatResponse
 } from '../../types';
 
 const API_BASE_URL = window.location.hostname === 'localhost'
@@ -421,6 +426,22 @@ class APIClient {
 
   async getPaperSummary(paperId: string): Promise<{ summary: string | null }> {
     const response = await this.client.get(`/papers/${paperId}/summary`);
+    return response.data;
+  }
+
+  // Knowledge Base Hybrid Search
+  async kbSearch(request: KBSearchRequest): Promise<KBSearchResponse> {
+    const response = await this.client.post<KBSearchResponse>('/kb-search', request);
+    return response.data;
+  }
+
+  async getKBSearchStats(): Promise<KBSearchStats> {
+    const response = await this.client.get<KBSearchStats>('/kb-search/stats');
+    return response.data;
+  }
+
+  async startPaperChat(request: StartPaperChatRequest): Promise<StartPaperChatResponse> {
+    const response = await this.client.post<StartPaperChatResponse>('/kb-search/start-chat', request);
     return response.data;
   }
 

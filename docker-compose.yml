@@ -44,6 +44,14 @@ services:
       CHUNK_SIZE: ${CHUNK_SIZE:-1000}
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
       MAX_CHUNKS_PER_PAPER: ${MAX_CHUNKS_PER_PAPER:-50}
+
+      # BM25 Search Configuration (Vajra)
+      BM25_INDEX_PATH: /app/data/vajra_indexes
+      BM25_K1: ${BM25_K1:-1.5}
+      BM25_B: ${BM25_B:-0.75}
+      BM25_USE_EAGER: ${BM25_USE_EAGER:-true}
+    volumes:
+      - vajra_data:/app/data/vajra_indexes
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -63,7 +71,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s  # Increased to allow index initialization
 
   # Praval Agent Workers
   research_agents:
@@ -102,6 +110,14 @@ services:
       CHUNK_SIZE: ${CHUNK_SIZE:-1000}
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
       MAX_CHUNKS_PER_PAPER: ${MAX_CHUNKS_PER_PAPER:-50}
+
+      # BM25 Search Configuration (Vajra) - shared with API
+      BM25_INDEX_PATH: /app/data/vajra_indexes
+      BM25_K1: ${BM25_K1:-1.5}
+      BM25_B: ${BM25_B:-0.75}
+      BM25_USE_EAGER: ${BM25_USE_EAGER:-true}
+    volumes:
+      - vajra_data:/app/data/vajra_indexes
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -318,6 +334,8 @@ volumes:
   postgres_data:
     driver: local
   prometheus_data:
+    driver: local
+  vajra_data:
     driver: local
 
 networks:

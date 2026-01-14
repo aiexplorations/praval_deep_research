@@ -5,6 +5,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -16,11 +17,14 @@ import ContentGeneratorModal from '../components/content/ContentGeneratorModal';
 import type { Message, QuestionRequest } from '../types';
 
 export default function Chat() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [question, setQuestion] = useState('');
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set());
   const [showSidebar, setShowSidebar] = useState(true);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [showContentModal, setShowContentModal] = useState(false);
+  const [paperContext, setPaperContext] = useState<{ paper_ids: string[]; paper_titles?: string[] } | null>(null);
+  const [urlConversationLoaded, setUrlConversationLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -42,6 +46,7 @@ export default function Chat() {
       console.log('New conversation created:', data);
       setCurrentConversation(data.id);
       clearMessages();
+      setPaperContext(null);  // Clear paper context for new conversations
       refetchConversations();
     }
   });
@@ -53,6 +58,18 @@ export default function Chat() {
       console.log('Loaded conversation:', data.id, 'with', data.messages?.length, 'messages');
       setCurrentConversation(data.id);
       clearMessages();
+
+      // Extract paper context from metadata (for "Chat with Papers" feature)
+      if (data.metadata?.paper_ids && data.metadata.paper_ids.length > 0) {
+        console.log('Conversation has paper context:', data.metadata.paper_ids, data.metadata.paper_titles);
+        setPaperContext({
+          paper_ids: data.metadata.paper_ids,
+          paper_titles: data.metadata.paper_titles || [],
+        });
+      } else {
+        setPaperContext(null);
+      }
+
       // Load messages from conversation with thread-based branching info
       if (data.messages) {
         data.messages.forEach((msg: any) => {
@@ -121,15 +138,28 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Auto-load most recent conversation on initial page load (only if no pending question)
+  // Load conversation from URL parameter (e.g., /chat?conversation_id=xxx from KB search)
   useEffect(() => {
-    if (conversationsData && conversationsData.length > 0 && !currentConversationId && messages.length === 0 && !pendingQuestion) {
+    const conversationIdFromUrl = searchParams.get('conversation_id');
+    if (conversationIdFromUrl && !urlConversationLoaded && !loadConversationMutation.isPending) {
+      console.log('Loading conversation from URL:', conversationIdFromUrl);
+      setUrlConversationLoaded(true);
+      loadConversationMutation.mutate(conversationIdFromUrl);
+      // Clear the URL parameter to avoid reloading on refresh
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, urlConversationLoaded, loadConversationMutation.isPending]);
+
+  // Auto-load most recent conversation on initial page load (only if no URL param and no pending question)
+  useEffect(() => {
+    const hasUrlParam = searchParams.get('conversation_id');
+    if (conversationsData && conversationsData.length > 0 && !currentConversationId && messages.length === 0 && !pendingQuestion && !hasUrlParam && !urlConversationLoaded) {
       // Load the most recent conversation
       const mostRecent = conversationsData[0];
       console.log('Auto-loading most recent conversation:', mostRecent.id);
       loadConversationMutation.mutate(mostRecent.id);
     }
-  }, [conversationsData, currentConversationId, messages.length, pendingQuestion]);
+  }, [conversationsData, currentConversationId, messages.length, pendingQuestion, searchParams, urlConversationLoaded]);
 
   // Q&A mutation
   const askMutation = useMutation({
@@ -458,16 +488,46 @@ export default function Chat() {
           </div>
         </div>
 
+        {/* Paper Context Banner - Shows when chatting about specific papers */}
+        {paperContext && paperContext.paper_ids.length > 0 && (
+          <div className="bg-primary/10 border-b border-primary/20 px-6 py-4 shrink-0">
+            <div className="container mx-auto max-w-4xl">
+              <div className="flex items-start gap-3">
+                <span className="text-primary font-medium text-sm mt-0.5">📚 Focused Chat</span>
+                <div className="flex-1">
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Answering questions using {paperContext.paper_ids.length} selected paper{paperContext.paper_ids.length !== 1 ? 's' : ''}:
+                  </p>
+                  <ul className="space-y-1">
+                    {(paperContext.paper_titles || paperContext.paper_ids).map((title, idx) => (
+                      <li key={paperContext.paper_ids[idx]} className="text-sm flex items-start gap-2">
+                        <span className="text-primary/60">•</span>
+                        <span className="text-foreground/80" title={paperContext.paper_ids[idx]}>
+                          {title.length > 80 ? `${title.substring(0, 80)}...` : title}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Messages Container - Scrollable */}
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="container mx-auto px-6 py-6 max-w-4xl space-y-6 min-h-full">
             {messages.length === 0 ? (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center text-muted-foreground max-w-md">
-                  <p className="text-lg font-medium mb-2">Welcome to Research Chat</p>
+                  <p className="text-lg font-medium mb-2">
+                    {paperContext ? 'Chat About Selected Papers' : 'Welcome to Research Chat'}
+                  </p>
                   <p className="text-sm">
-                    Search for papers above, index them, then ask me questions.
-                    I'll use semantic search to find relevant content and provide detailed answers with source citations.
+                    {paperContext
+                      ? `Ask questions about the ${paperContext.paper_ids.length} paper${paperContext.paper_ids.length !== 1 ? 's' : ''} you selected. I'll focus my answers on content from these specific papers.`
+                      : 'Search for papers above, index them, then ask me questions. I\'ll use semantic search to find relevant content and provide detailed answers with source citations.'
+                    }
                   </p>
                 </div>
               </div>

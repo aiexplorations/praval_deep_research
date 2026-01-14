@@ -71,6 +71,13 @@ class Conversation(Base):
         default=0,
         nullable=False
     )
+    # Context data (e.g., paper_ids for KB search chats)
+    # Note: Cannot use 'metadata' as it's reserved by SQLAlchemy
+    context_data: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None
+    )
 
     # Relationship to messages (one-to-many)
     messages: Mapped[List["Message"]] = relationship(

@@ -32,7 +32,8 @@ def _two_tier_retrieval(
     top_k_summaries: int = 10,
     top_k_chunks: int = 5,
     summary_threshold: float = 0.6,
-    chunk_threshold: float = 0.7
+    chunk_threshold: float = 0.7,
+    paper_ids: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
     Implement two-tier retrieval for context engineering.
@@ -41,6 +42,9 @@ def _two_tier_retrieval(
     Tier 2 (Deep): For top papers, retrieve detailed chunks
     Tier 3 (Expanded): Search linked papers for broader context
 
+    Args:
+        paper_ids: If provided, filter all results to only these papers (for "Chat with Papers")
+
     Returns:
         Dictionary with summary_matches, chunk_matches, linked_matches
     """
@@ -48,33 +52,52 @@ def _two_tier_retrieval(
         "summary_matches": [],
         "chunk_matches": [],
         "linked_matches": [],
-        "relevant_paper_ids": set()
+        "relevant_paper_ids": set(),
+        "filtered_to_papers": paper_ids or []
     }
+
+    # Helper to filter results by paper_ids
+    def filter_by_papers(items: List[Dict], id_key: str = "paper_id") -> List[Dict]:
+        if not paper_ids:
+            return items
+        return [item for item in items if item.get(id_key) in paper_ids or
+                item.get("payload", {}).get("paper_id") in paper_ids]
 
     # Tier 1: Fast path - search summaries
     try:
+        # Get more results if filtering, to ensure we have enough after filter
+        fetch_limit = top_k_summaries * 3 if paper_ids else top_k_summaries
         summary_results = qdrant_client.search_summaries(
             query_vector=query_embedding,
-            limit=top_k_summaries,
+            limit=fetch_limit,
             score_threshold=summary_threshold
         )
+
+        # Filter by paper_ids if specified
+        summary_results = filter_by_papers(summary_results)[:top_k_summaries]
 
         for summary in summary_results:
             results["summary_matches"].append(summary)
             if summary.get("paper_id"):
                 results["relevant_paper_ids"].add(summary["paper_id"])
 
-        logger.debug(f"Tier 1: Found {len(summary_results)} relevant papers via summaries")
+        logger.debug(f"Tier 1: Found {len(summary_results)} relevant papers via summaries" +
+                    (f" (filtered to {len(paper_ids)} papers)" if paper_ids else ""))
     except Exception as e:
         logger.warning(f"Summary search failed, falling back to chunks only: {e}")
 
     # Tier 2: Deep path - search main collection for chunks
     try:
+        # Get more results if filtering
+        fetch_limit = top_k_chunks * 5 if paper_ids else top_k_chunks
         chunk_results = qdrant_client.search_similar(
             query_vector=query_embedding,
-            limit=top_k_chunks,
+            limit=fetch_limit,
             score_threshold=chunk_threshold
         )
+
+        # Filter by paper_ids if specified
+        chunk_results = filter_by_papers(chunk_results)[:top_k_chunks]
 
         for chunk in chunk_results:
             results["chunk_matches"].append(chunk)
@@ -82,22 +105,27 @@ def _two_tier_retrieval(
             if paper_id:
                 results["relevant_paper_ids"].add(paper_id)
 
-        logger.debug(f"Tier 2: Found {len(chunk_results)} relevant chunks")
+        logger.debug(f"Tier 2: Found {len(chunk_results)} relevant chunks" +
+                    (f" (filtered to {len(paper_ids)} papers)" if paper_ids else ""))
     except Exception as e:
         logger.warning(f"Chunk search failed: {e}")
 
-    # Tier 3: Expanded context - search linked papers
-    try:
-        linked_results = qdrant_client.search_linked_papers(
-            query_vector=query_embedding,
-            limit=3,  # Fewer linked results to avoid overwhelming
-            score_threshold=chunk_threshold
-        )
+    # Tier 3: Expanded context - search linked papers (only if not filtering)
+    # When filtering to specific papers, we focus on those papers only
+    if not paper_ids:
+        try:
+            linked_results = qdrant_client.search_linked_papers(
+                query_vector=query_embedding,
+                limit=3,  # Fewer linked results to avoid overwhelming
+                score_threshold=chunk_threshold
+            )
 
-        results["linked_matches"] = linked_results
-        logger.debug(f"Tier 3: Found {len(linked_results)} relevant linked paper chunks")
-    except Exception as e:
-        logger.debug(f"Linked papers search skipped or failed: {e}")
+            results["linked_matches"] = linked_results
+            logger.debug(f"Tier 3: Found {len(linked_results)} relevant linked paper chunks")
+        except Exception as e:
+            logger.debug(f"Linked papers search skipped or failed: {e}")
+    else:
+        logger.debug("Tier 3: Skipped linked papers search (filtering to selected papers)")
 
     return results
 
@@ -129,12 +157,16 @@ def qa_specialist_agent(spore: Spore) -> None:
     user_id = spore.knowledge.get("user_id", "anonymous")
     conversation_context = spore.knowledge.get("conversation_context", [])
     include_sources = spore.knowledge.get("include_sources", True)
+    paper_ids = spore.knowledge.get("paper_ids", None)  # For "Chat with Papers" filtering
 
     if not user_query:
         logger.warning("Q&A specialist received empty query")
         return
 
-    logger.info(f"❓ Q&A Specialist: Answering '{user_query}' for user {user_id}")
+    if paper_ids:
+        logger.info(f"❓ Q&A Specialist: Answering '{user_query}' for user {user_id} (FILTERED to {len(paper_ids)} papers)")
+    else:
+        logger.info(f"❓ Q&A Specialist: Answering '{user_query}' for user {user_id}")
 
     # Initialize storage clients
     try:
@@ -192,14 +224,18 @@ def qa_specialist_agent(spore: Spore) -> None:
         query_embedding = embeddings_gen.generate_embedding(search_query)
 
         # STEP 2: Two-Tier Retrieval (Context Engineering)
-        logger.debug("Performing two-tier retrieval...")
+        if paper_ids:
+            logger.debug(f"Performing two-tier retrieval (filtered to {len(paper_ids)} papers)...")
+        else:
+            logger.debug("Performing two-tier retrieval...")
         retrieval_results = _two_tier_retrieval(
             qdrant_client=qdrant_client,
             query_embedding=query_embedding,
             top_k_summaries=10,
-            top_k_chunks=5,
-            summary_threshold=0.6,
-            chunk_threshold=0.7
+            top_k_chunks=8 if paper_ids else 5,  # More chunks when filtered to specific papers
+            summary_threshold=0.5 if paper_ids else 0.6,  # Lower threshold when filtered
+            chunk_threshold=0.5 if paper_ids else 0.7,  # Lower threshold when filtered
+            paper_ids=paper_ids
         )
 
         # Collect all search results
@@ -313,9 +349,18 @@ def qa_specialist_agent(spore: Spore) -> None:
         if not context_str:
             context_str = "No directly relevant research papers found in the database."
 
+        # Build focused context note if filtering to specific papers
+        focused_note = ""
+        if paper_ids:
+            focused_note = f"""
+        IMPORTANT: This is a focused chat about {len(paper_ids)} specific papers selected by the user.
+        Focus your answer ONLY on content from these papers. Do not bring in information from other papers.
+        If the question cannot be fully answered from these papers, acknowledge this limitation.
+        """
+
         qa_prompt = f"""
         Answer this research question with expertise and precision:
-
+        {focused_note}
         Question: {user_query}
 
         Relevant Papers Overview (summaries):
@@ -333,7 +378,7 @@ def qa_specialist_agent(spore: Spore) -> None:
         Provide a comprehensive answer that:
         1. Directly addresses the question using the retrieved research context
         2. Cites specific papers and findings from the context
-        3. When relevant, mention insights from linked/cited papers (marked as [Linked])
+        3. {"Focus ONLY on the selected papers" if paper_ids else "When relevant, mention insights from linked/cited papers (marked as [Linked])"}
         4. Acknowledges any limitations if context is insufficient
         5. Considers the user's apparent research interests
         6. Maintains academic rigor while being accessible
@@ -439,6 +484,9 @@ def qa_specialist_agent(spore: Spore) -> None:
                     "conversation_length": len(conversation_context),
                     "similar_questions_found": len(similar_questions),
                     "vector_search_performed": True,
+                    # Paper filtering for "Chat with Papers"
+                    "paper_ids_filter": paper_ids,
+                    "filtered_chat": bool(paper_ids),
                     # Two-tier retrieval stats
                     "two_tier_retrieval": {
                         "summaries_found": len(summary_matches),
