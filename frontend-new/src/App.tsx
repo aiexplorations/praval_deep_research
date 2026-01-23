@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Discover from './pages/Discover';
 import Chat from './pages/Chat';
 import KnowledgeBase from './pages/KnowledgeBase';
+import Settings from './pages/Settings';
 
 const Dashboard = () => (
   <div className="container mx-auto px-4 py-8 max-w-4xl">
@@ -98,6 +99,12 @@ function App() {
                 >
                   Knowledge Base
                 </Link>
+                <Link
+                  to="/settings"
+                  className="text-muted-foreground hover:text-primary transition-colors"
+                >
+                  Settings
+                </Link>
               </div>
 
               {/* Praval Branding - Top Right */}
@@ -125,6 +132,7 @@ function App() {
             <Route path="/discover" element={<Discover />} />
             <Route path="/chat" element={<Chat />} />
             <Route path="/knowledge-base" element={<KnowledgeBase />} />
+            <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>

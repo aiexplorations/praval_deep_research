@@ -122,7 +122,30 @@ class Settings(BaseSettings):
     # Monitoring
     PROMETHEUS_PORT: int = Field(default=9090, env="PROMETHEUS_PORT")
     METRICS_ENABLED: bool = Field(default=True, env="METRICS_ENABLED")
-    
+
+    # LangExtract Configuration
+    LANGEXTRACT_PROVIDER: str = Field(default="gemini", env="LANGEXTRACT_PROVIDER")
+    LANGEXTRACT_MODEL: str = Field(default="gemini-2.5-flash", env="LANGEXTRACT_MODEL")
+    LANGEXTRACT_ENABLED: bool = Field(default=True, env="LANGEXTRACT_ENABLED")
+    GEMINI_API_KEY: Optional[str] = Field(default=None, env="GEMINI_API_KEY")
+    OLLAMA_BASE_URL: str = Field(default="http://localhost:11434", env="OLLAMA_BASE_URL")
+    OLLAMA_MODEL: str = Field(default="gemma2:9b", env="OLLAMA_MODEL")
+    LANGEXTRACT_MAX_RETRIES: int = Field(default=3, env="LANGEXTRACT_MAX_RETRIES")
+    LANGEXTRACT_TIMEOUT: int = Field(default=120, env="LANGEXTRACT_TIMEOUT")
+
+    # Knowledge Graph Configuration
+    KG_ENABLED: bool = Field(default=True, env="KG_ENABLED")
+    KG_BUILDER_URL: str = Field(default="http://localhost:8081", env="KG_BUILDER_URL")
+    NEO4J_URI: str = Field(default="bolt://localhost:7687", env="NEO4J_URI")
+    NEO4J_USER: str = Field(default="neo4j", env="NEO4J_USER")
+    NEO4J_PASSWORD: str = Field(default="research_graph", env="NEO4J_PASSWORD")
+
+    # Extractions Collection (Qdrant)
+    QDRANT_EXTRACTIONS_COLLECTION: str = Field(
+        default="paper_extractions",
+        env="QDRANT_EXTRACTIONS_COLLECTION"
+    )
+
     model_config = {"env_file": ".env", "case_sensitive": True}
     
     @field_validator("LOG_LEVEL")
@@ -138,18 +161,38 @@ class Settings(BaseSettings):
     @classmethod
     def validate_praval_provider(cls, v: str) -> str:
         """Validate Praval provider is supported."""
-        valid_providers = ["openai", "anthropic"]
+        valid_providers = ["openai", "anthropic", "ollama"]
         if v.lower() not in valid_providers:
             raise ValueError(f"PRAVAL_DEFAULT_PROVIDER must be one of: {', '.join(valid_providers)}")
+        return v.lower()
+
+    @field_validator("LANGEXTRACT_PROVIDER")
+    @classmethod
+    def validate_langextract_provider(cls, v: str) -> str:
+        """Validate LangExtract provider is supported."""
+        valid_providers = ["gemini", "openai", "ollama"]
+        if v.lower() not in valid_providers:
+            raise ValueError(f"LANGEXTRACT_PROVIDER must be one of: {', '.join(valid_providers)}")
         return v.lower()
     
     def validate_api_keys(self) -> None:
         """Validate that required API keys are present."""
         if self.PRAVAL_DEFAULT_PROVIDER == "openai" and not self.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is required when using OpenAI provider")
-        
+
         if self.PRAVAL_DEFAULT_PROVIDER == "anthropic" and not self.ANTHROPIC_API_KEY:
             raise ValueError("ANTHROPIC_API_KEY is required when using Anthropic provider")
+
+        # Ollama doesn't require API keys (local models)
+        # No validation needed for ollama provider
+
+        # LangExtract API key validation
+        if self.LANGEXTRACT_ENABLED:
+            if self.LANGEXTRACT_PROVIDER == "gemini" and not self.GEMINI_API_KEY:
+                raise ValueError("GEMINI_API_KEY is required when using Gemini provider for LangExtract")
+            if self.LANGEXTRACT_PROVIDER == "openai" and not self.OPENAI_API_KEY:
+                raise ValueError("OPENAI_API_KEY is required when using OpenAI provider for LangExtract")
+            # Ollama doesn't require API keys for LangExtract either
     
     def get_praval_config(self) -> Dict[str, Any]:
         """Get Praval framework configuration."""

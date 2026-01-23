@@ -18,6 +18,14 @@ from agentic_research.storage.qdrant_client import QdrantClientWrapper
 from agentic_research.storage.embeddings import EmbeddingsGenerator
 from processors.pdf_processor import PDFProcessor, PDFProcessingError
 
+# LangExtract integration for structured entity extraction
+try:
+    from agentic_research.extraction import LangExtractProcessor
+    LANGEXTRACT_AVAILABLE = True
+except ImportError:
+    LANGEXTRACT_AVAILABLE = False
+    LangExtractProcessor = None
+
 # Import SSE broadcast helper for real-time notifications
 try:
     from agentic_research.api.routes.sse import broadcast_agent_event_sync
@@ -99,6 +107,18 @@ def document_processing_agent(spore: Spore) -> None:
             vector_size=settings.EMBEDDING_DIMENSIONS,
             recreate=False
         )
+
+        # Initialize LangExtract processor for structured extraction
+        langextract_processor = None
+        if LANGEXTRACT_AVAILABLE and settings.LANGEXTRACT_ENABLED:
+            try:
+                langextract_processor = LangExtractProcessor()
+                logger.info("LangExtract processor initialized for structured extraction")
+            except Exception as le_error:
+                logger.warning(f"LangExtract initialization failed, skipping structured extraction: {le_error}")
+        else:
+            logger.info("LangExtract disabled or unavailable, skipping structured extraction")
+
         logger.info("Storage clients initialized successfully")
 
     except Exception as e:
@@ -127,6 +147,7 @@ def document_processing_agent(spore: Spore) -> None:
         "failed": 0,
         "pdf_downloaded": 0,
         "vectors_stored": 0,
+        "extractions_generated": 0,
         "errors": []
     }
 
@@ -239,6 +260,56 @@ def document_processing_agent(spore: Spore) -> None:
                     processing_stats["vectors_stored"] += vectors_added
 
                     logger.info(f"✅ PDF pipeline complete for {arxiv_id}: {vectors_added} vectors stored")
+
+                    # STEP 7: LangExtract structured extraction (optional)
+                    if langextract_processor and extracted_text:
+                        try:
+                            logger.debug(f"Running LangExtract for {arxiv_id}...")
+                            paper_extractions = langextract_processor.extract_from_paper(
+                                text=extracted_text,
+                                paper_id=arxiv_id,
+                                title=paper.get('title', '')
+                            )
+
+                            if paper_extractions.extractions:
+                                # Generate embeddings for extractions
+                                extraction_texts = [
+                                    f"{e.name}: {e.content}"
+                                    for e in paper_extractions.extractions
+                                ]
+                                extraction_embeddings = embeddings_gen.generate_embeddings_batch(
+                                    extraction_texts
+                                )
+
+                                # Store extractions in Qdrant
+                                extraction_dicts = [
+                                    e.to_dict() for e in paper_extractions.extractions
+                                ]
+                                extractions_added = qdrant_client.add_extractions(
+                                    paper_id=arxiv_id,
+                                    extractions=extraction_dicts,
+                                    embeddings=extraction_embeddings
+                                )
+                                processing_stats["extractions_generated"] += extractions_added
+
+                                logger.info(
+                                    f"✅ LangExtract complete for {arxiv_id}: "
+                                    f"{len(paper_extractions.extractions)} entities extracted "
+                                    f"({paper_extractions.to_dict()['summary']})"
+                                )
+
+                                # Emit SSE event for extraction completion
+                                broadcast_agent_event_sync({
+                                    "event_type": "extractions_complete",
+                                    "arxiv_id": arxiv_id,
+                                    "extraction_count": len(paper_extractions.extractions),
+                                    "summary": paper_extractions.to_dict()['summary']
+                                })
+
+                        except Exception as le_error:
+                            logger.warning(
+                                f"LangExtract failed for {arxiv_id}, continuing: {le_error}"
+                            )
 
                 except PDFProcessingError as e:
                     logger.warning(f"PDF processing failed for {arxiv_id}, using abstract only: {e}")
@@ -396,11 +467,14 @@ AGENT_METADATA = {
         "Embedding generation with OpenAI",
         "Vector storage in Qdrant",
         "Metadata extraction with LLM",
-        "Quality assessment"
+        "Quality assessment",
+        "Structured entity extraction with LangExtract",
+        "Knowledge graph entity preparation"
     ],
     "responds_to": ["papers_found"],
     "broadcasts": ["documents_processed", "processing_error"],
     "memory_enabled": True,
     "learning_focus": "processing patterns and domain-specific extraction techniques",
-    "storage_integrations": ["MinIO", "Qdrant", "OpenAI Embeddings"]
+    "storage_integrations": ["MinIO", "Qdrant", "OpenAI Embeddings", "LangExtract"],
+    "extraction_types": ["method", "dataset", "finding", "citation", "metric", "limitation"]
 }

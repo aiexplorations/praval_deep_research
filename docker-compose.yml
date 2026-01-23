@@ -50,8 +50,23 @@ services:
       BM25_K1: ${BM25_K1:-1.5}
       BM25_B: ${BM25_B:-0.75}
       BM25_USE_EAGER: ${BM25_USE_EAGER:-true}
+
+      # LangExtract Configuration
+      LANGEXTRACT_ENABLED: ${LANGEXTRACT_ENABLED:-true}
+      LANGEXTRACT_PROVIDER: ${LANGEXTRACT_PROVIDER:-gemini}
+      LANGEXTRACT_MODEL: ${LANGEXTRACT_MODEL:-gemini-2.5-flash}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma2:9b}
+
+      # Knowledge Graph Configuration
+      KG_ENABLED: ${KG_ENABLED:-true}
+      KG_BUILDER_URL: http://kg_builder:8080
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-research_graph}
     volumes:
-      - vajra_data:/app/data/vajra_indexes
+      - ./data/vajra_indexes:/app/data/vajra_indexes  # Local bind mount for BM25 indexes
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -116,8 +131,23 @@ services:
       BM25_K1: ${BM25_K1:-1.5}
       BM25_B: ${BM25_B:-0.75}
       BM25_USE_EAGER: ${BM25_USE_EAGER:-true}
+
+      # LangExtract Configuration (agents need this for extraction)
+      LANGEXTRACT_ENABLED: ${LANGEXTRACT_ENABLED:-true}
+      LANGEXTRACT_PROVIDER: ${LANGEXTRACT_PROVIDER:-gemini}
+      LANGEXTRACT_MODEL: ${LANGEXTRACT_MODEL:-gemini-2.5-flash}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma2:9b}
+
+      # Knowledge Graph Configuration
+      KG_ENABLED: ${KG_ENABLED:-true}
+      KG_BUILDER_URL: http://kg_builder:8080
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-research_graph}
     volumes:
-      - vajra_data:/app/data/vajra_indexes
+      - ./data/vajra_indexes:/app/data/vajra_indexes  # Local bind mount for BM25 indexes
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -155,6 +185,10 @@ services:
     environment:
       # Vite env vars (build-time)
       VITE_API_URL: http://localhost:8000
+      # Neo4j connection for neovis.js Knowledge Graph visualization
+      VITE_NEO4J_URL: bolt://localhost:7687
+      VITE_NEO4J_USER: neo4j
+      VITE_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-research_graph}
     depends_on:
       research_api:
         condition: service_healthy
@@ -203,7 +237,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ./data/qdrant:/qdrant/storage  # Local bind mount for vector embeddings
       - ./docker/qdrant_config.yaml:/qdrant/config/production.yaml:ro
     environment:
       QDRANT__SERVICE__HTTP_PORT: 6333
@@ -230,7 +264,7 @@ services:
       MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
     command: server /data --console-address ":9001"
     volumes:
-      - minio_data:/data
+      - ./data/minio:/data  # Local bind mount - papers browsable at ./data/minio/research-papers/
     healthcheck:
       test: curl -f http://localhost:9000/minio/health/live || exit 1
       interval: 30s
@@ -264,6 +298,63 @@ services:
       - research_network
     restart: unless-stopped
 
+  # ==========================================
+  # Knowledge Graph Services
+  # ==========================================
+
+  # Neo4j Graph Database
+  neo4j:
+    image: neo4j:5-community
+    container_name: research_neo4j
+    ports:
+      - "7474:7474"  # Browser UI
+      - "7687:7687"  # Bolt protocol
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-research_graph}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_memory_heap_initial__size: 512m
+      NEO4J_dbms_memory_heap_max__size: 1G
+    volumes:
+      - ./data/neo4j/data:/data  # Local bind mount for graph data
+      - ./data/neo4j/logs:/logs  # Local bind mount for logs
+    healthcheck:
+      test: wget --quiet --tries=1 --spider http://localhost:7474 || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - research_network
+    restart: unless-stopped
+
+  # Kay-Gee-Go Knowledge Graph Builder
+  kg_builder:
+    build:
+      context: ./kay-gee-go
+      dockerfile: Dockerfile
+    container_name: research_kg_builder
+    ports:
+      - "8081:8080"
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-research_graph}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    networks:
+      - research_network
+    restart: unless-stopped
+    healthcheck:
+      test: wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    profiles:
+      - knowledge-graph
+
   # Development Tools
   adminer:
     image: adminer:latest
@@ -289,7 +380,7 @@ services:
       POSTGRES_USER: research_user
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-research_pass}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data  # Local bind mount for database
     healthcheck:
       test: pg_isready -U research_user -d praval_research
       interval: 30s
@@ -323,20 +414,19 @@ services:
       - monitoring
 
 volumes:
+  # Only keeping volumes for services that don't need local filesystem access
   rabbitmq_data:
-    driver: local
-  qdrant_data:
-    driver: local
-  minio_data:
     driver: local
   redis_data:
     driver: local
-  postgres_data:
-    driver: local
   prometheus_data:
     driver: local
-  vajra_data:
-    driver: local
+  # The following are now bind-mounted to ./data/ for local access:
+  # - minio -> ./data/minio (research papers)
+  # - qdrant -> ./data/qdrant (vector embeddings)
+  # - vajra -> ./data/vajra_indexes (BM25 search indexes)
+  # - postgres -> ./data/postgres (chat history, metadata)
+  # - neo4j -> ./data/neo4j (knowledge graph)
 
 networks:
   research_network:

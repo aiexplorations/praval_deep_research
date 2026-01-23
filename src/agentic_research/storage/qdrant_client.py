@@ -38,6 +38,7 @@ class CollectionType(str, Enum):
     RESEARCH_PAPERS = "research_papers"  # Main KB paper chunks
     PAPER_SUMMARIES = "paper_summaries"  # One summary per paper for fast retrieval
     LINKED_PAPERS = "linked_papers"      # Fully indexed cited papers
+    PAPER_EXTRACTIONS = "paper_extractions"  # Structured entity extractions
 
 
 class QdrantClientWrapper:
@@ -64,6 +65,7 @@ class QdrantClientWrapper:
             CollectionType.RESEARCH_PAPERS: self.settings.QDRANT_COLLECTION_NAME,
             CollectionType.PAPER_SUMMARIES: self.settings.QDRANT_SUMMARIES_COLLECTION,
             CollectionType.LINKED_PAPERS: self.settings.QDRANT_LINKED_PAPERS_COLLECTION,
+            CollectionType.PAPER_EXTRACTIONS: self.settings.QDRANT_EXTRACTIONS_COLLECTION,
         }
 
         # Set current collection - defaults to research papers for backward compatibility
@@ -1098,3 +1100,283 @@ class QdrantClientWrapper:
                 error=str(e)
             )
             return []
+
+    def add_extractions(
+        self,
+        paper_id: str,
+        extractions: List[Dict[str, Any]],
+        embeddings: List[List[float]],
+        batch_size: int = 100
+    ) -> int:
+        """
+        Add structured extractions to the paper_extractions collection.
+
+        Each extraction is stored with its embedding for semantic search.
+
+        Args:
+            paper_id: Unique paper identifier
+            extractions: List of extraction dictionaries containing:
+                - type: Extraction type (method, dataset, finding, etc.)
+                - name: Short identifier
+                - content: Detailed description
+                - source_span: Source location for grounding
+                - confidence: Extraction confidence score
+                - attributes: Type-specific attributes
+            embeddings: List of embeddings corresponding to each extraction
+            batch_size: Number of points to upload per batch
+
+        Returns:
+            Number of extractions added
+        """
+        extractions_collection = self._collection_names[CollectionType.PAPER_EXTRACTIONS]
+
+        try:
+            # Ensure collection exists
+            self._ensure_extractions_collection()
+
+            points = []
+            for i, (extraction, embedding) in enumerate(zip(extractions, embeddings)):
+                # Generate unique point ID
+                point_id = abs(hash(
+                    f"extraction_{paper_id}_{extraction.get('type')}_{i}"
+                )) % (2**63 - 1)
+
+                # Build payload
+                payload = {
+                    "paper_id": paper_id,
+                    "extraction_type": extraction.get("type", "unknown"),
+                    "name": extraction.get("name", ""),
+                    "content": extraction.get("content", ""),
+                    "confidence": extraction.get("confidence", 0.8),
+                    "attributes": extraction.get("attributes", {}),
+                    "source_span": extraction.get("source_span", {}),
+                    "extracted_at": extraction.get("extracted_at", ""),
+                }
+
+                points.append(
+                    PointStruct(
+                        id=point_id,
+                        vector=embedding,
+                        payload=payload
+                    )
+                )
+
+            # Upload in batches
+            total_uploaded = 0
+            for i in range(0, len(points), batch_size):
+                batch = points[i:i + batch_size]
+                self.client.upload_points(
+                    collection_name=extractions_collection,
+                    points=batch,
+                    wait=True
+                )
+                total_uploaded += len(batch)
+
+            logger.info(
+                "Added extractions",
+                paper_id=paper_id,
+                num_extractions=total_uploaded,
+                collection=extractions_collection
+            )
+
+            return total_uploaded
+
+        except Exception as e:
+            logger.error(
+                "Failed to add extractions",
+                paper_id=paper_id,
+                error=str(e)
+            )
+            raise
+
+    def search_extractions(
+        self,
+        query_vector: List[float],
+        extraction_types: Optional[List[str]] = None,
+        paper_ids: Optional[List[str]] = None,
+        limit: int = 10,
+        score_threshold: float = 0.6
+    ) -> List[Dict[str, Any]]:
+        """
+        Search structured extractions for precise entity retrieval.
+
+        Args:
+            query_vector: Query embedding vector
+            extraction_types: Optional filter by extraction types (method, dataset, etc.)
+            paper_ids: Optional filter by paper IDs
+            limit: Maximum number of results
+            score_threshold: Minimum similarity score
+
+        Returns:
+            List of extraction results with metadata and scores
+        """
+        extractions_collection = self._collection_names[CollectionType.PAPER_EXTRACTIONS]
+
+        try:
+            # Build filter conditions
+            conditions = []
+
+            if extraction_types:
+                from qdrant_client.models import MatchAny
+                conditions.append(
+                    FieldCondition(
+                        key="extraction_type",
+                        match=MatchAny(any=extraction_types)
+                    )
+                )
+
+            if paper_ids:
+                from qdrant_client.models import MatchAny
+                conditions.append(
+                    FieldCondition(
+                        key="paper_id",
+                        match=MatchAny(any=paper_ids)
+                    )
+                )
+
+            query_filter = Filter(must=conditions) if conditions else None
+
+            results = self.client.search(
+                collection_name=extractions_collection,
+                query_vector=query_vector,
+                limit=limit,
+                score_threshold=score_threshold,
+                query_filter=query_filter,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            return [
+                {
+                    "id": hit.id,
+                    "score": hit.score,
+                    "paper_id": hit.payload.get("paper_id"),
+                    "extraction_type": hit.payload.get("extraction_type"),
+                    "name": hit.payload.get("name"),
+                    "content": hit.payload.get("content"),
+                    "confidence": hit.payload.get("confidence"),
+                    "attributes": hit.payload.get("attributes", {}),
+                    "source_span": hit.payload.get("source_span", {}),
+                    "payload": hit.payload
+                }
+                for hit in results
+            ]
+
+        except Exception as e:
+            logger.error("Extractions search failed", error=str(e))
+            return []
+
+    def get_paper_extractions(self, paper_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all extractions for a specific paper.
+
+        Args:
+            paper_id: Unique paper identifier
+
+        Returns:
+            List of extraction payloads
+        """
+        extractions_collection = self._collection_names[CollectionType.PAPER_EXTRACTIONS]
+
+        try:
+            # Check if collection exists
+            collections = self.client.get_collections().collections
+            if not any(col.name == extractions_collection for col in collections):
+                return []
+
+            result = self.client.scroll(
+                collection_name=extractions_collection,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="paper_id",
+                            match=MatchValue(value=paper_id)
+                        )
+                    ]
+                ),
+                limit=1000,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            extractions = [
+                {
+                    "id": point.id,
+                    **point.payload
+                }
+                for point in result[0]
+            ]
+
+            logger.info(
+                "Retrieved paper extractions",
+                paper_id=paper_id,
+                num_extractions=len(extractions)
+            )
+
+            return extractions
+
+        except Exception as e:
+            logger.error(
+                "Failed to get paper extractions",
+                paper_id=paper_id,
+                error=str(e)
+            )
+            return []
+
+    def delete_paper_extractions(self, paper_id: str) -> None:
+        """
+        Delete all extractions for a paper.
+
+        Args:
+            paper_id: Unique paper identifier
+        """
+        extractions_collection = self._collection_names[CollectionType.PAPER_EXTRACTIONS]
+
+        try:
+            self.client.delete(
+                collection_name=extractions_collection,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="paper_id",
+                            match=MatchValue(value=paper_id)
+                        )
+                    ]
+                )
+            )
+
+            logger.info(
+                "Deleted paper extractions",
+                paper_id=paper_id
+            )
+
+        except Exception as e:
+            logger.error(
+                "Failed to delete paper extractions",
+                paper_id=paper_id,
+                error=str(e)
+            )
+
+    def _ensure_extractions_collection(self) -> None:
+        """Ensure the extractions collection exists."""
+        extractions_collection = self._collection_names[CollectionType.PAPER_EXTRACTIONS]
+
+        try:
+            collections = self.client.get_collections().collections
+            if not any(col.name == extractions_collection for col in collections):
+                self.client.create_collection(
+                    collection_name=extractions_collection,
+                    vectors_config=VectorParams(
+                        size=self.settings.EMBEDDING_DIMENSIONS,
+                        distance=Distance.COSINE
+                    )
+                )
+                logger.info(
+                    "Created extractions collection",
+                    collection=extractions_collection
+                )
+        except Exception as e:
+            logger.warning(
+                "Could not create extractions collection",
+                error=str(e)
+            )

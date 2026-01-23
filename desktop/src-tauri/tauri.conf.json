@@ -1,0 +1,92 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Praval Deep Research",
+  "version": "1.0.0",
+  "identifier": "com.praval.deep-research",
+  "build": {
+    "beforeDevCommand": "cd ../frontend-new && npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "cd ../frontend-new && npm run build",
+    "frontendDist": "../frontend-new/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Praval Deep Research",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "center": true
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    },
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:* https://api.openai.com"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "targets": "all",
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "frameworks": [],
+      "signingIdentity": null,
+      "entitlements": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    },
+    "category": "Productivity",
+    "shortDescription": "AI-Powered Research Paper Assistant",
+    "longDescription": "Praval Deep Research helps you discover, analyze, and understand research papers using advanced AI. Features semantic search, knowledge graphs, and intelligent Q&A.",
+    "externalBin": [
+      "binaries/praval-backend"
+    ],
+    "resources": []
+  },
+  "plugins": {
+    "dialog": {},
+    "fs": {
+      "scope": {
+        "allow": ["$HOME/.praval/**", "$APPDATA/Praval/**", "$DOCUMENT/**"],
+        "deny": []
+      }
+    },
+    "notification": {
+      "all": true
+    },
+    "shell": {
+      "open": true,
+      "scope": [
+        {
+          "name": "python-backend",
+          "cmd": "python",
+          "args": ["-m", "uvicorn", "agentic_research.api.main:app", "--host", "127.0.0.1", "--port", "8000"]
+        }
+      ]
+    },
+    "updater": {
+      "endpoints": [
+        "https://github.com/aiexplorations/praval_deep_research/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
+  }
+}

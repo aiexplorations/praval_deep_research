@@ -26,7 +26,7 @@ Built with the [Praval Agentic Framework](https://pravalagents.com) - demonstrat
 
 ## 🎯 What Is This?
 
-Praval Deep Research is a **local-first**, privacy-focused research assistant that helps you discover, analyze, and understand academic papers from ArXiv. All your research data stays on your machine - papers, embeddings, conversations, and insights are stored locally. LLM processing uses OpenAI API (local model support with Ollama planned for future releases).
+Praval Deep Research is a **local-first**, privacy-focused research assistant that helps you discover, analyze, and understand academic papers from ArXiv. All your research data stays on your machine - papers, embeddings, conversations, and insights are stored locally. Supports multiple LLM providers including **OpenAI**, **Anthropic (Claude)**, and **Ollama** for fully local operation.
 
 <div align="center">
 <img src="img/pdr_discover_1.png" alt="Praval Deep Research - Discover Papers" width="800"/>
@@ -40,7 +40,7 @@ Praval Deep Research is a **local-first**, privacy-focused research assistant th
 - Papers and embeddings remain on your machine
 - Complete control over your research knowledge base
 - External API calls only for ArXiv paper downloads and OpenAI LLM/embeddings
-- Local model support (Ollama) planned for fully offline operation
+- **Ollama support** for fully offline operation with local models
 
 **Agent-Driven Intelligence**
 - Built on [Praval](https://pravalagents.com) - the modern agentic framework
@@ -169,6 +169,14 @@ Each agent has:
 - **Context-Aware**: Analyzes both knowledge base and recent conversation patterns
 - **Fast Category Filter**: Category clicks use Vajra BM25 index (~3ms response)
 
+### ⚙️ Settings & Configuration
+- **In-App Settings Page**: Configure all options from the UI
+- **Multi-Provider Support**: Switch between OpenAI, Anthropic, or Ollama
+- **API Key Management**: Securely store keys locally (never sent to external servers)
+- **Ollama Auto-Detection**: Automatically discovers installed local models
+- **Model Selection**: Choose your preferred model per provider
+- **LangExtract Configuration**: Separate provider selection for PDF extraction
+
 ### 🏗️ Production-Grade Infrastructure
 - **Vector Database**: Qdrant for semantic search (1536-dim OpenAI embeddings)
 - **Persistent Storage**: PostgreSQL for chat conversation history with relational integrity
@@ -177,6 +185,7 @@ Each agent has:
 - **Message Queue**: RabbitMQ for reliable agent communication
 - **Real-time Updates**: Server-Sent Events for live progress tracking
 - **Containerized**: Full Docker Compose deployment with health checks
+- **Desktop App**: Native Tauri app for macOS, Windows, and Linux
 - **Monitoring**: Structured logging with JSON output
 
 ---
@@ -223,6 +232,136 @@ docker-compose logs -f research_frontend research_api
 - **API Documentation**: http://localhost:8000/docs
 - **RabbitMQ Management**: http://localhost:15672 (user: `research_user`, pass: `research_pass`)
 - **MinIO Console**: http://localhost:9001 (user: `minioadmin`, pass: `minioadmin`)
+
+---
+
+## 🖥️ Desktop App (Tauri)
+
+Praval Deep Research can also run as a native desktop application using Tauri, providing a lightweight, secure, and fast experience without requiring Docker.
+
+### Download Pre-built Release ⚡
+
+The fastest way to get started - no build dependencies required!
+
+Download from [GitHub Releases](https://github.com/aiexplorations/praval_deep_research/releases/latest):
+
+| Platform | Download |
+|----------|----------|
+| **macOS (Apple Silicon)** | `Praval-Deep-Research_*_aarch64.dmg` |
+| **macOS (Intel)** | `Praval-Deep-Research_*_x64.dmg` |
+| **Windows** | `Praval-Deep-Research_*_x64-setup.exe` or `.msi` |
+| **Linux** | `praval-deep-research_*.AppImage` or `.deb` |
+
+Simply download, install, and run - no Python or other dependencies needed!
+
+### Build From Source
+
+If you want to build from source (for development or customization):
+
+**macOS:**
+```bash
+git clone https://github.com/aiexplorations/praval_deep_research.git
+cd praval_deep_research
+./scripts/install-macos.sh
+```
+
+**Windows (PowerShell as Administrator):**
+```powershell
+git clone https://github.com/aiexplorations/praval_deep_research.git
+cd praval_deep_research
+.\scripts\install-windows.ps1
+```
+
+**Linux (Ubuntu/Debian/Fedora/Arch):**
+```bash
+git clone https://github.com/aiexplorations/praval_deep_research.git
+cd praval_deep_research
+./scripts/install-linux.sh
+```
+
+The install scripts will:
+- ✅ Check and install all required dependencies (Node.js, Rust, Python)
+- ✅ Install platform-specific build tools
+- ✅ Optionally install Ollama for free local LLM support
+- ✅ Build the Python backend binary
+- ✅ Build the desktop application
+- ✅ Provide the installer/app package
+
+### Manual Build (Advanced)
+
+If you prefer to install dependencies manually:
+
+#### Prerequisites
+
+- **Node.js 18+** and **npm**
+- **Rust** (install via [rustup.rs](https://rustup.rs))
+- **Python 3.11+** with pip
+- **Platform-specific dependencies**:
+  - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
+  - **Windows**: Visual Studio Build Tools with C++ workload
+  - **Linux**: `sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf`
+
+#### Build Steps
+
+```bash
+# 1. Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# 2. Set up Python
+python3 -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+
+# 3. Install frontend dependencies
+cd frontend-new && npm install && cd ..
+
+# 4. Build desktop app
+cd desktop
+npm install
+npm run tauri build  # or: npm run tauri dev (for development)
+```
+
+#### Build Output Locations
+
+- **macOS**: `desktop/src-tauri/target/release/bundle/dmg/Praval Deep Research_*.dmg`
+- **Windows**: `desktop/src-tauri/target/release/bundle/msi/Praval Deep Research_*.msi`
+- **Linux**: `desktop/src-tauri/target/release/bundle/appimage/praval-deep-research_*.AppImage`
+
+### Desktop App Configuration
+
+The desktop app stores configuration locally:
+- **macOS**: `~/Library/Application Support/Praval/config.json`
+- **Windows**: `%APPDATA%/Praval/config.json`
+- **Linux**: `~/.config/praval/config.json`
+
+On first launch, go to **Settings** to configure your LLM provider and API keys.
+
+### Using Ollama (Free Local Models)
+
+For fully offline operation with no API costs:
+
+```bash
+# 1. Install Ollama from https://ollama.ai
+# macOS:
+brew install ollama
+
+# 2. Start Ollama service
+ollama serve
+
+# 3. Pull a model (e.g., llama3.2, mistral, or codellama)
+ollama pull llama3.2
+
+# 4. In Praval Settings, select "Ollama" as your LLM provider
+# The app will auto-detect your installed models
+```
+
+**Recommended Ollama Models:**
+- `llama3.2` - Great general-purpose model (3B/8B parameters)
+- `mistral` - Fast and capable (7B parameters)
+- `mixtral` - High quality responses (8x7B MoE)
+- `codellama` - Best for code-related research
+- `gemma2:9b` - Google's efficient model
 
 ---
 
@@ -597,7 +736,9 @@ This project showcases the power of the [Praval Agentic Framework](https://prava
 - 📋 Citation graph analysis
 - 📋 Multi-user support with authentication
 - 📋 Custom embedding models
-- 📋 Offline LLM support (Ollama integration)
+- ✅ **Ollama integration** for offline LLM support
+- ✅ **Desktop app** with Tauri for native experience
+- ✅ **Settings page** for in-app configuration
 
 ---
 

@@ -35,6 +35,7 @@ import uvicorn
 
 from .routes import health_router, research_router, kb_search_router
 from .routes.sse import router as sse_router, set_event_loop
+from .routes.config import router as config_router
 from .models.research import ErrorResponse
 from ..core.config import get_settings
 # Removed old research_agent import - now using distributed Praval agents
@@ -419,6 +420,7 @@ app.include_router(health_router)
 app.include_router(research_router)
 app.include_router(kb_search_router)
 app.include_router(sse_router)
+app.include_router(config_router)
 
 
 @app.get("/", summary="API root")

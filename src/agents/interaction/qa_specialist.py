@@ -31,13 +31,16 @@ def _two_tier_retrieval(
     query_embedding: List[float],
     top_k_summaries: int = 10,
     top_k_chunks: int = 5,
+    top_k_extractions: int = 5,
     summary_threshold: float = 0.6,
     chunk_threshold: float = 0.7,
+    extraction_threshold: float = 0.6,
     paper_ids: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
-    Implement two-tier retrieval for context engineering.
+    Implement multi-tier retrieval for context engineering.
 
+    Tier 0 (Extractions): Search structured entities for precise matches
     Tier 1 (Fast): Search summaries to identify relevant papers
     Tier 2 (Deep): For top papers, retrieve detailed chunks
     Tier 3 (Expanded): Search linked papers for broader context
@@ -46,9 +49,10 @@ def _two_tier_retrieval(
         paper_ids: If provided, filter all results to only these papers (for "Chat with Papers")
 
     Returns:
-        Dictionary with summary_matches, chunk_matches, linked_matches
+        Dictionary with extraction_matches, summary_matches, chunk_matches, linked_matches
     """
     results = {
+        "extraction_matches": [],
         "summary_matches": [],
         "chunk_matches": [],
         "linked_matches": [],
@@ -62,6 +66,30 @@ def _two_tier_retrieval(
             return items
         return [item for item in items if item.get(id_key) in paper_ids or
                 item.get("payload", {}).get("paper_id") in paper_ids]
+
+    # Tier 0: Extraction search - search structured entities for precise matches
+    try:
+        # Search for relevant extractions (methods, datasets, findings, etc.)
+        extraction_results = qdrant_client.search_extractions(
+            query_vector=query_embedding,
+            extraction_types=["method", "dataset", "finding", "metric"],  # Focus on key types
+            paper_ids=paper_ids,
+            limit=top_k_extractions * 3 if paper_ids else top_k_extractions,
+            score_threshold=extraction_threshold
+        )
+
+        # Filter and limit
+        extraction_results = filter_by_papers(extraction_results)[:top_k_extractions]
+
+        for extraction in extraction_results:
+            results["extraction_matches"].append(extraction)
+            if extraction.get("paper_id"):
+                results["relevant_paper_ids"].add(extraction["paper_id"])
+
+        logger.debug(f"Tier 0: Found {len(extraction_results)} relevant extractions" +
+                    (f" (filtered to {len(paper_ids)} papers)" if paper_ids else ""))
+    except Exception as e:
+        logger.debug(f"Extraction search skipped or failed: {e}")
 
     # Tier 1: Fast path - search summaries
     try:
@@ -239,14 +267,40 @@ def qa_specialist_agent(spore: Spore) -> None:
         )
 
         # Collect all search results
+        extraction_matches = retrieval_results["extraction_matches"]
         search_results = retrieval_results["chunk_matches"]
         summary_matches = retrieval_results["summary_matches"]
         linked_matches = retrieval_results["linked_matches"]
 
-        # STEP 3: Build context from retrieved chunks and summaries
+        # STEP 3: Build context from extractions, chunks, and summaries
         context_pieces = []
         sources = []
         summary_context = []
+        extraction_context = []
+
+        # Add structured extractions for precise entity context (from Tier 0)
+        for extraction in extraction_matches[:5]:
+            extraction_context.append({
+                "type": extraction.get("extraction_type", "unknown"),
+                "name": extraction.get("name", ""),
+                "content": extraction.get("content", ""),
+                "paper_id": extraction.get("paper_id", ""),
+                "confidence": extraction.get("confidence", 0.0),
+                "relevance": extraction.get("score", 0.0),
+                "source_span": extraction.get("source_span", {}),
+                "attributes": extraction.get("attributes", {})
+            })
+
+            # Add extraction source
+            source_citation = {
+                "title": f"[Extraction: {extraction.get('extraction_type', 'entity')}] {extraction.get('name', '')}",
+                "paper_id": extraction.get("paper_id", ""),
+                "relevance_score": extraction.get("score", 0.0),
+                "excerpt": extraction.get("content", "")[:200],
+                "is_extraction": True,
+                "extraction_type": extraction.get("extraction_type", "")
+            }
+            sources.append(source_citation)
 
         # Add paper summaries for high-level context (from Tier 1)
         for summary in summary_matches[:5]:
@@ -313,12 +367,20 @@ def qa_specialist_agent(spore: Spore) -> None:
                       for s in sources):
                 sources.append(source_citation)
 
-        logger.info(f"Two-tier retrieval: {len(summary_matches)} summaries, {len(search_results)} chunks, {len(linked_matches)} linked chunks")
+        logger.info(f"Multi-tier retrieval: {len(extraction_matches)} extractions, {len(summary_matches)} summaries, {len(search_results)} chunks, {len(linked_matches)} linked chunks")
 
         # STEP 4: Generate personalized response with retrieved context
         # Build context string for LLM
 
-        # First, add high-level paper summaries for quick context
+        # First, add structured extractions for precise entity context
+        extraction_str = ""
+        if extraction_context:
+            extraction_str = "\n".join([
+                f"- [{e['type'].upper()}] {e['name']}: {e['content'][:200]}..."
+                for e in extraction_context[:5]
+            ])
+
+        # Then, add high-level paper summaries for quick context
         summary_str = ""
         if summary_context:
             summary_str = "\n".join([
@@ -362,6 +424,9 @@ def qa_specialist_agent(spore: Spore) -> None:
         Answer this research question with expertise and precision:
         {focused_note}
         Question: {user_query}
+
+        Structured Entities (methods, datasets, findings, metrics):
+        {extraction_str if extraction_str else "No structured extractions available"}
 
         Relevant Papers Overview (summaries):
         {summary_str if summary_str else "No paper summaries available"}
@@ -487,8 +552,9 @@ def qa_specialist_agent(spore: Spore) -> None:
                     # Paper filtering for "Chat with Papers"
                     "paper_ids_filter": paper_ids,
                     "filtered_chat": bool(paper_ids),
-                    # Two-tier retrieval stats
-                    "two_tier_retrieval": {
+                    # Multi-tier retrieval stats
+                    "multi_tier_retrieval": {
+                        "extractions_found": len(extraction_matches),
                         "summaries_found": len(summary_matches),
                         "main_chunks_found": len(search_results),
                         "linked_chunks_found": len(linked_matches),
@@ -558,7 +624,8 @@ AGENT_METADATA = {
     "identity": "research Q&A expert",
     "domain": "interaction",
     "capabilities": [
-        "two-tier retrieval (summaries -> chunks)",
+        "multi-tier retrieval (extractions -> summaries -> chunks)",
+        "structured entity search (methods, datasets, findings)",
         "semantic vector search",
         "contextual question answering",
         "personalized responses",
@@ -576,10 +643,12 @@ AGENT_METADATA = {
         "Qdrant (research_papers collection)",
         "Qdrant (paper_summaries collection)",
         "Qdrant (linked_papers collection)",
+        "Qdrant (paper_extractions collection)",
         "OpenAI Embeddings"
     ],
     "context_engineering": {
-        "two_tier_retrieval": True,
+        "multi_tier_retrieval": True,
+        "extraction_search": True,
         "linked_papers_integration": True
     }
 }
